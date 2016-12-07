@@ -295,6 +295,25 @@ struct rcu_node {
 	     cpu <= rnp->grphi; \
 	     cpu = cpumask_next((cpu), cpu_possible_mask))
 
+
+#define MASK_BITS(mask)	(BITS_PER_BYTE * sizeof(mask))
+/*
+ * Iterate over all CPUs a leaf RCU node which are still masked in
+ * @mask.
+ *
+ * Note @rnp has to be a leaf node and @mask has to belong to @rnp. And we
+ * assume that no CPU is masked in @mask but not set in cpu_possible_mask. IOW,
+ * masks of a leaf node never set a bit for an "impossible" CPU.
+ */
+#define for_each_leaf_node_cpu(rnp, mask, cpu) \
+	for ((cpu) = (rnp)->grplo + find_first_bit(&(mask), MASK_BITS(mask)); \
+	     (cpu) <= (rnp)->grphi; \
+	     (cpu) = (rnp)->grplo + find_next_bit(&(mask), MASK_BITS(mask), \
+						  (cpu) - (rnp)->grplo + 1)) \
+		if (WARN_ON_ONCE(!cpu_possible(cpu))) \
+			continue; \
+		else
+
 /*
  * Union to allow "aggregate OR" operation on the need for a quiescent
  * state by the normal and expedited grace periods.
