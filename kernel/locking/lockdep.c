@@ -1156,6 +1156,23 @@ print_circular_lock_scenario(struct held_lock *src,
 		__print_lock_name(target);
 		printk(KERN_CONT ");\n");
 		printk("\n *** DEADLOCK ***\n\n");
+	} else if (cross_lock(src->instance)) {
+		printk(" Possible unsafe locking scenario by crosslock:\n\n");
+		printk("       CPU0                    CPU1\n");
+		printk("       ----                    ----\n");
+		printk("  lock(");
+		__print_lock_name(target);
+		printk(KERN_CONT ");\n");
+		printk("  lock(");
+		__print_lock_name(source);
+		printk(KERN_CONT ");\n");
+		printk("                               lock(");
+		__print_lock_name(parent == source ? target : parent);
+		printk(KERN_CONT ");\n");
+		printk("                               unlock(");
+		__print_lock_name(source);
+		printk(KERN_CONT ");\n");
+		printk("\n *** DEADLOCK ***\n\n");
 	} else {
 		printk(" Possible unsafe locking scenario:\n\n");
 		printk("       CPU0                    CPU1\n");
