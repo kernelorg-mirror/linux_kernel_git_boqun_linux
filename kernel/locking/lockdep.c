@@ -1195,17 +1195,23 @@ print_circular_bug_header(struct lock_list *entry, unsigned int depth,
 	pr_warn("WARNING: possible circular locking dependency detected\n");
 	print_kernel_ident();
 	pr_warn("------------------------------------------------------\n");
-	pr_warn("%s/%d is trying to acquire lock:\n",
-		curr->comm, task_pid_nr(curr));
-	print_lock(check_src);
 
-	if (cross_lock(check_tgt->instance))
-		pr_warn("\nbut now in release context of a crosslock acquired at the following:\n");
-	else
+	if (cross_lock(check_tgt->instance)) {
+		pr_warn("%s/%d is committing a crossrelease lock acquired at:\n",
+			curr->comm, task_pid_nr(curr));
+		print_lock(check_tgt);
+		pr_warn("\n, after having the following lock held at least once:\n");
+		print_lock(check_src);
+		pr_warn("\non which lock the crossrelease lock already depends.\n\n");
+	} else {
+		pr_warn("%s/%d is trying to acquire lock:\n",
+			curr->comm, task_pid_nr(curr));
+		print_lock(check_src);
 		pr_warn("\nbut task is already holding lock:\n");
+		print_lock(check_tgt);
+		pr_warn("\nwhich lock already depends on the new lock.\n\n");
+	}
 
-	print_lock(check_tgt);
-	pr_warn("\nwhich lock already depends on the new lock.\n\n");
 	pr_warn("\nthe existing dependency chain (in reverse order) is:\n");
 
 	print_circular_bug_entry(entry, depth);
