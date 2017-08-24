@@ -83,6 +83,33 @@ enum {
 
 extern struct list_head all_lock_classes;
 extern struct lock_chain lock_chains[];
+extern struct lock_class lock_classes[];
+
+/*
+ * Helpers for switches among type(see lock_type()), idx and class
+ * t2c: type_to_class
+ * t2i: type_to_idx
+ * i2c: idx_to_class
+ * c2i: class_to_idx
+ */
+
+#define LOCK_CLASS_IDX_MASK ((1U << MAX_LOCKDEP_KEYS_BITS) - 1)
+
+#define lock_i2c(idx) \
+	(&lock_classes[idx - 1])
+
+#define lock_c2i(class) \
+	((unsigned int)(lock_classes - class + 1))
+
+#define lock_t2i(type) \
+	((type) & LOCK_CLASS_IDX_MASK)
+
+#define lock_t2c(type) \
+	lock_i2c(lock_t2i(type))
+
+#define lock_t2r(type) \
+	((type & ~LOCK_CLASS_IDX_MASK) >> MAX_LOCKDEP_KEYS_BITS)
+
 
 #define LOCK_USAGE_CHARS (1+LOCK_USAGE_STATES/2)
 

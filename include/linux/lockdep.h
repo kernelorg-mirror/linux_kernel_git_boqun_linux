@@ -182,13 +182,24 @@ static inline void lockdep_copy_map(struct lockdep_map *to,
 }
 
 /*
+ * lock type is the tuple of (lock class idx, read status)
+ */
+#define lock_type(idx, read) \
+	(((read) << MAX_LOCKDEP_KEYS_BITS) | (idx))
+/*
+ * class idx can not be zero
+ */
+#define LOCK_INVALID_TYPE 0
+
+/*
  * Every lock has a list of other locks that were taken after it.
  * We only grow the list, never remove from it:
  */
 struct lock_list {
 	struct list_head		entry;
-	struct lock_class		*class;
 	struct stack_trace		trace;
+	unsigned int			type:16;
+	unsigned int			head_rw_state:16;
 	int				distance;
 
 	/*

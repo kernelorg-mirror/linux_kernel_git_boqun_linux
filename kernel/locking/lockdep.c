@@ -142,7 +142,7 @@ static struct lock_list list_entries[MAX_LOCKDEP_ENTRIES];
  * get freed - this significantly simplifies the debugging code.
  */
 unsigned long nr_lock_classes;
-static struct lock_class lock_classes[MAX_LOCKDEP_KEYS];
+struct lock_class lock_classes[MAX_LOCKDEP_KEYS];
 
 static inline struct lock_class *hlock_class(struct held_lock *hlock)
 {
@@ -154,6 +154,18 @@ static inline struct lock_class *hlock_class(struct held_lock *hlock)
 		return NULL;
 	}
 	return lock_classes + hlock->class_idx - 1;
+}
+
+static inline unsigned int hlock_type(struct held_lock *hlock)
+{
+	if (!hlock->class_idx) {
+		/*
+		 * Someone passed in garbage, we give up.
+		 */
+		DEBUG_LOCKS_WARN_ON(1);
+		return LOCK_INVALID_TYPE;
+	}
+	return lock_type(hlock->class_idx, hlock->read);
 }
 
 #ifdef CONFIG_LOCK_STAT
@@ -317,11 +329,11 @@ static struct hlist_head chainhash_table[CHAINHASH_SIZE];
  * It's a 64-bit hash, because it's important for the keys to be
  * unique.
  */
-static inline u64 iterate_chain_key(u64 key, u32 idx)
+static inline u64 iterate_chain_key(u64 key, u32 type)
 {
 	u32 k0 = key, k1 = key >> 32;
 
-	__jhash_mix(idx, k0, k1); /* Macro that modifies arguments! */
+	__jhash_mix(type, k0, k1); /* Macro that modifies arguments! */
 
 	return k0 | (u64)k1 << 32;
 }
@@ -870,9 +882,9 @@ static struct lock_list *alloc_list_entry(void)
 /*
  * Add a new dependency to the head of the list:
  */
-static int add_lock_to_list(struct lock_class *this, struct list_head *head,
-			    unsigned long ip, int distance,
-			    struct stack_trace *trace)
+static int add_lock_to_list(unsigned int type, unsigned int head_rw_state,
+			    struct list_head *head, unsigned long ip,
+			    int distance, struct stack_trace *trace)
 {
 	struct lock_list *entry;
 	/*
@@ -883,7 +895,8 @@ static int add_lock_to_list(struct lock_class *this, struct list_head *head,
 	if (!entry)
 		return 0;
 
-	entry->class = this;
+	entry->type = type;
+	entry->head_rw_state = head_rw_state;
 	entry->distance = distance;
 	entry->trace = *trace;
 	/*
@@ -968,7 +981,7 @@ static inline void mark_lock_accessed(struct lock_list *lock,
 	nr = lock - list_entries;
 	WARN_ON(nr >= nr_list_entries); /* Out-of-bounds, input fail */
 	lock->parent = parent;
-	lock->class->dep_gen_id = lockdep_dependency_gen_id;
+	lock_t2c(lock->type)->dep_gen_id = lockdep_dependency_gen_id;
 }
 
 static inline unsigned long lock_accessed(struct lock_list *lock)
@@ -977,7 +990,7 @@ static inline unsigned long lock_accessed(struct lock_list *lock)
 
 	nr = lock - list_entries;
 	WARN_ON(nr >= nr_list_entries); /* Out-of-bounds, input fail */
-	return lock->class->dep_gen_id == lockdep_dependency_gen_id;
+	return lock_t2c(lock->type)->dep_gen_id == lockdep_dependency_gen_id;
 }
 
 static inline struct lock_list *get_lock_parent(struct lock_list *child)
@@ -1005,6 +1018,7 @@ static int __bfs(struct lock_list *source_entry,
 {
 	struct lock_list *entry;
 	struct list_head *head;
+	unsigned int head_rw_state;
 	struct circular_queue *cq = &lock_cq;
 	int ret = 1;
 
@@ -1015,9 +1029,11 @@ static int __bfs(struct lock_list *source_entry,
 	}
 
 	if (forward)
-		head = &source_entry->class->locks_after;
+		head = &lock_t2c(source_entry->type)->locks_after;
 	else
-		head = &source_entry->class->locks_before;
+		head = &lock_t2c(source_entry->type)->locks_before;
+
+	head_rw_state = lock_t2r(source_entry->type);
 
 	if (list_empty(head))
 		goto exit;
@@ -1030,20 +1046,23 @@ static int __bfs(struct lock_list *source_entry,
 
 		__cq_dequeue(cq, (unsigned long *)&lock);
 
-		if (!lock->class) {
+		if (!lock->type) {
 			ret = -2;
 			goto exit;
 		}
 
 		if (forward)
-			head = &lock->class->locks_after;
+			head = &lock_t2c(lock->type)->locks_after;
 		else
-			head = &lock->class->locks_before;
+			head = &lock_t2c(lock->type)->locks_before;
+
+		head_rw_state = lock_t2r(source_entry->type);
 
 		DEBUG_LOCKS_WARN_ON(!irqs_disabled());
 
 		list_for_each_entry_rcu(entry, head, entry) {
-			if (!lock_accessed(entry)) {
+			if (!lock_accessed(entry) &&
+			    ((head_rw_state == 3) || head_rw_state == entry->head_rw_state)) {
 				unsigned int cq_depth;
 				mark_lock_accessed(entry, lock);
 				if (match(entry, data)) {
@@ -1100,7 +1119,7 @@ print_circular_bug_entry(struct lock_list *target, int depth)
 	if (debug_locks_silent)
 		return 0;
 	printk("\n-> #%u", depth);
-	print_lock_name(target->class);
+	print_lock_name(lock_t2c(target->type));
 	printk(KERN_CONT ":\n");
 	print_stack_trace(&target->trace, 6);
 
@@ -1114,7 +1133,7 @@ print_circular_lock_scenario(struct held_lock *src,
 {
 	struct lock_class *source = hlock_class(src);
 	struct lock_class *target = hlock_class(tgt);
-	struct lock_class *parent = prt->class;
+	struct lock_class *parent = lock_t2c(prt->type);
 
 	/*
 	 * A direct locking problem where unsafe_class lock is taken
@@ -1238,7 +1257,12 @@ print_circular_bug_header(struct lock_list *entry, unsigned int depth,
 
 static inline int class_equal(struct lock_list *entry, void *data)
 {
-	return entry->class == data;
+	return lock_t2c(entry->type) == data;
+}
+
+static inline int type_equal(struct lock_list *entry, void *data)
+{
+	return entry->type = (unsigned long)data;
 }
 
 static noinline int print_circular_bug(struct lock_list *this,
@@ -1318,7 +1342,7 @@ unsigned long lockdep_count_forward_deps(struct lock_class *class)
 	struct lock_list this;
 
 	this.parent = NULL;
-	this.class = class;
+	this.type = lock_type(lock_c2i(class), 3);
 
 	local_irq_save(flags);
 	arch_spin_lock(&lockdep_lock);
@@ -1345,7 +1369,7 @@ unsigned long lockdep_count_backward_deps(struct lock_class *class)
 	struct lock_list this;
 
 	this.parent = NULL;
-	this.class = class;
+	this.type = lock_type(lock_c2i(class), 3);
 
 	local_irq_save(flags);
 	arch_spin_lock(&lockdep_lock);
@@ -1361,27 +1385,28 @@ unsigned long lockdep_count_backward_deps(struct lock_class *class)
  * lead to <target>. Print an error and return 0 if it does.
  */
 static noinline int
-check_noncircular(struct lock_list *root, struct lock_class *target,
+check_noncircular(struct lock_list *root, unsigned int target_type,
 		struct lock_list **target_entry)
 {
 	int result;
 
 	debug_atomic_inc(nr_cyclic_checks);
 
-	result = __bfs_forwards(root, target, class_equal, target_entry);
+	//TODO fix class_equal
+	result = __bfs_forwards(root, (void *)(unsigned long)target_type, class_equal, target_entry);
 
 	return result;
 }
 
 static noinline int
-check_redundant(struct lock_list *root, struct lock_class *target,
+check_redundant(struct lock_list *root, unsigned int target_type,
 		struct lock_list **target_entry)
 {
 	int result;
 
 	debug_atomic_inc(nr_redundant_checks);
 
-	result = __bfs_forwards(root, target, class_equal, target_entry);
+	result = __bfs_forwards(root, (void *)(unsigned long)target_type, type_equal, target_entry);
 
 	return result;
 }
@@ -1395,7 +1420,7 @@ check_redundant(struct lock_list *root, struct lock_class *target,
 
 static inline int usage_match(struct lock_list *entry, void *bit)
 {
-	return entry->class->usage_mask & (1 << (enum lock_usage_bit)bit);
+	return lock_t2c(entry->type)->usage_mask & (1 << (enum lock_usage_bit)bit);
 }
 
 
@@ -1484,7 +1509,7 @@ print_shortest_lock_dependencies(struct lock_list *leaf,
 	depth = get_lock_depth(leaf);
 
 	do {
-		print_lock_class_header(entry->class, depth);
+		print_lock_class_header(lock_t2c(entry->type), depth);
 		printk("%*s ... acquired at:\n", depth, "");
 		print_stack_trace(&entry->trace, 2);
 		printk("\n");
@@ -1507,8 +1532,8 @@ print_irq_lock_scenario(struct lock_list *safe_entry,
 			struct lock_class *prev_class,
 			struct lock_class *next_class)
 {
-	struct lock_class *safe_class = safe_entry->class;
-	struct lock_class *unsafe_class = unsafe_entry->class;
+	struct lock_class *safe_class = lock_t2c(safe_entry->type);
+	struct lock_class *unsafe_class = lock_t2c(unsafe_entry->type);
 	struct lock_class *middle_class = prev_class;
 
 	if (middle_class == safe_class)
@@ -1596,17 +1621,17 @@ print_bad_irq_dependency(struct task_struct *curr,
 
 	pr_warn("\nbut this new dependency connects a %s-irq-safe lock:\n",
 		irqclass);
-	print_lock_name(backwards_entry->class);
+	print_lock_name(lock_t2c(backwards_entry->type));
 	pr_warn("\n... which became %s-irq-safe at:\n", irqclass);
 
-	print_stack_trace(backwards_entry->class->usage_traces + bit1, 1);
+	print_stack_trace(lock_t2c(backwards_entry->type)->usage_traces + bit1, 1);
 
 	pr_warn("\nto a %s-irq-unsafe lock:\n", irqclass);
-	print_lock_name(forwards_entry->class);
+	print_lock_name(lock_t2c(forwards_entry->type));
 	pr_warn("\n... which became %s-irq-unsafe at:\n", irqclass);
 	pr_warn("...");
 
-	print_stack_trace(forwards_entry->class->usage_traces + bit2, 1);
+	print_stack_trace(lock_t2c(forwards_entry->type)->usage_traces + bit2, 1);
 
 	pr_warn("\nother info that might help us debug this:\n\n");
 	print_irq_lock_scenario(backwards_entry, forwards_entry,
@@ -1643,7 +1668,7 @@ check_usage(struct task_struct *curr, struct held_lock *prev,
 
 	this.parent = NULL;
 
-	this.class = hlock_class(prev);
+	this.type = hlock_type(prev);
 	ret = find_usage_backwards(&this, bit_backwards, &target_entry);
 	if (ret < 0)
 		return print_bfs_bug(ret);
@@ -1651,7 +1676,7 @@ check_usage(struct task_struct *curr, struct held_lock *prev,
 		return ret;
 
 	that.parent = NULL;
-	that.class = hlock_class(next);
+	that.type = hlock_type(next);
 	ret = find_usage_forwards(&that, bit_forwards, &target_entry1);
 	if (ret < 0)
 		return print_bfs_bug(ret);
@@ -1910,9 +1935,9 @@ check_prev_add(struct task_struct *curr, struct held_lock *prev,
 	 * We are using global variables to control the recursion, to
 	 * keep the stackframe size of the recursive functions low:
 	 */
-	this.class = hlock_class(next);
+	this.type = hlock_type(next);
 	this.parent = NULL;
-	ret = check_noncircular(&this, hlock_class(prev), &target_entry);
+	ret = check_noncircular(&this, hlock_type(prev), &target_entry);
 	if (unlikely(!ret))
 		return print_circular_bug(&this, target_entry, next, prev, trace);
 	else if (unlikely(ret < 0))
@@ -1940,7 +1965,7 @@ check_prev_add(struct task_struct *curr, struct held_lock *prev,
 	 *  L2 added to its dependency list, due to the first chain.)
 	 */
 	list_for_each_entry(entry, &hlock_class(prev)->locks_after, entry) {
-		if (entry->class == hlock_class(next)) {
+		if (entry->type == hlock_type(next)) {
 			if (distance == 1)
 				entry->distance = 1;
 			return 1;
@@ -1950,9 +1975,9 @@ check_prev_add(struct task_struct *curr, struct held_lock *prev,
 	/*
 	 * Is the <prev> -> <next> link redundant?
 	 */
-	this.class = hlock_class(prev);
+	this.type = hlock_type(prev);
 	this.parent = NULL;
-	ret = check_redundant(&this, hlock_class(next), &target_entry);
+	ret = check_redundant(&this, hlock_type(next), &target_entry);
 	if (!ret) {
 		debug_atomic_inc(nr_redundant);
 		return 2;
@@ -1968,14 +1993,14 @@ check_prev_add(struct task_struct *curr, struct held_lock *prev,
 	 * Ok, all validations passed, add the new lock
 	 * to the previous lock's dependency list:
 	 */
-	ret = add_lock_to_list(hlock_class(next),
+	ret = add_lock_to_list(hlock_type(next), prev->read,
 			       &hlock_class(prev)->locks_after,
 			       next->acquire_ip, distance, trace);
 
 	if (!ret)
 		return 0;
 
-	ret = add_lock_to_list(hlock_class(prev),
+	ret = add_lock_to_list(hlock_type(prev), next->read,
 			       &hlock_class(next)->locks_before,
 			       next->acquire_ip, distance, trace);
 	if (!ret)
@@ -2123,12 +2148,12 @@ static inline int get_first_held_lock(struct task_struct *curr,
 /*
  * Returns the next chain_key iteration
  */
-static u64 print_chain_key_iteration(int class_idx, u64 chain_key)
+static u64 print_chain_key_iteration(unsigned int type, u64 chain_key)
 {
-	u64 new_chain_key = iterate_chain_key(chain_key, class_idx);
+	u64 new_chain_key = iterate_chain_key(chain_key, type);
 
-	printk(" class_idx:%d -> chain_key:%016Lx",
-		class_idx,
+	printk(" type:%d -> chain_key:%016Lx",
+		type,
 		(unsigned long long)new_chain_key);
 	return new_chain_key;
 }
@@ -2144,12 +2169,12 @@ print_chain_keys_held_locks(struct task_struct *curr, struct held_lock *hlock_ne
 	printk("depth: %u\n", depth + 1);
 	for (i = get_first_held_lock(curr, hlock_next); i < depth; i++) {
 		hlock = curr->held_locks + i;
-		chain_key = print_chain_key_iteration(hlock->class_idx, chain_key);
+		chain_key = print_chain_key_iteration(hlock_type(hlock), chain_key);
 
 		print_lock(hlock);
 	}
 
-	print_chain_key_iteration(hlock_next->class_idx, chain_key);
+	print_chain_key_iteration(hlock_type(hlock_next), chain_key);
 	print_lock(hlock_next);
 }
 
@@ -2157,12 +2182,12 @@ static void print_chain_keys_chain(struct lock_chain *chain)
 {
 	int i;
 	u64 chain_key = 0;
-	int class_id;
+	unsigned int type;
 
 	printk("depth: %u\n", chain->depth);
 	for (i = 0; i < chain->depth; i++) {
-		class_id = chain_hlocks[chain->base + i];
-		chain_key = print_chain_key_iteration(class_id + 1, chain_key);
+		type = chain_hlocks[chain->base + i] + 1;
+		chain_key = print_chain_key_iteration(type + 1, chain_key);
 
 		print_lock_name(lock_classes + class_id);
 		printk("\n");
@@ -2270,8 +2295,8 @@ static inline int add_chain_cache_classes(unsigned int prev,
 	if (likely(nr_chain_hlocks + chain->depth <= MAX_LOCKDEP_CHAIN_HLOCKS)) {
 		chain->base = nr_chain_hlocks;
 		nr_chain_hlocks += chain->depth;
-		chain_hlocks[chain->base] = prev - 1;
-		chain_hlocks[chain->base + 1] = next -1;
+		chain_hlocks[chain->base] = prev;
+		chain_hlocks[chain->base + 1] = next;
 	}
 #ifdef CONFIG_DEBUG_LOCKDEP
 	/*
@@ -2305,7 +2330,7 @@ static inline int add_chain_cache(struct task_struct *curr,
 				  struct held_lock *hlock,
 				  u64 chain_key)
 {
-	struct lock_class *class = hlock_class(hlock);
+	unsigned int type = hlock_type(hlock);
 	struct hlist_head *hash_head = chainhashentry(chain_key);
 	struct lock_chain *chain;
 	int i, j;
@@ -2344,10 +2369,9 @@ static inline int add_chain_cache(struct task_struct *curr,
 	if (likely(nr_chain_hlocks + chain->depth <= MAX_LOCKDEP_CHAIN_HLOCKS)) {
 		chain->base = nr_chain_hlocks;
 		for (j = 0; j < chain->depth - 1; j++, i++) {
-			int lock_id = curr->held_locks[i].class_idx - 1;
-			chain_hlocks[chain->base + j] = lock_id;
+			chain_hlocks[chain->base + j] = hlock_type(&curr->held_locks[i]);
 		}
-		chain_hlocks[chain->base + j] = class - lock_classes;
+		chain_hlocks[chain->base + j] = type;
 	}
 
 	if (nr_chain_hlocks < MAX_LOCKDEP_CHAIN_HLOCKS)
@@ -2545,7 +2569,7 @@ static void check_chain_key(struct task_struct *curr)
 		if (prev_hlock && (prev_hlock->irq_context !=
 							hlock->irq_context))
 			chain_key = 0;
-		chain_key = iterate_chain_key(chain_key, hlock->class_idx);
+		chain_key = iterate_chain_key(chain_key, hlock_type(hlock));
 		prev_hlock = hlock;
 	}
 	if (chain_key != curr->curr_chain_key) {
@@ -2664,7 +2688,7 @@ print_irq_inversion_bug(struct task_struct *curr,
 		pr_warn("but this lock took another, %s-unsafe lock in the past:\n", irqclass);
 	else
 		pr_warn("but this lock was taken by another, %s-safe lock in the past:\n", irqclass);
-	print_lock_name(other->class);
+	print_lock_name(lock_t2c(other->type));
 	pr_warn("\n\nand interrupts could create inverse lock ordering between them.\n\n");
 
 	pr_warn("\nother info that might help us debug this:\n");
@@ -2682,10 +2706,10 @@ print_irq_inversion_bug(struct task_struct *curr,
 	} while (entry && entry != root && (depth >= 0));
 	if (forwards)
 		print_irq_lock_scenario(root, other,
-			middle ? middle->class : root->class, other->class);
+			middle ? lock_t2c(middle->type) : lock_t2c(root->type), lock_t2c(other->type));
 	else
 		print_irq_lock_scenario(other, root,
-			middle ? middle->class : other->class, root->class);
+			middle ? lock_t2c(middle->type) : lock_t2c(other->type), lock_t2c(root->type));
 
 	lockdep_print_held_locks(curr);
 
@@ -2713,7 +2737,7 @@ check_usage_forwards(struct task_struct *curr, struct held_lock *this,
 	struct lock_list *uninitialized_var(target_entry);
 
 	root.parent = NULL;
-	root.class = hlock_class(this);
+	root.type = hlock_type(this);
 	ret = find_usage_forwards(&root, bit, &target_entry);
 	if (ret < 0)
 		return print_bfs_bug(ret);
@@ -2737,7 +2761,7 @@ check_usage_backwards(struct task_struct *curr, struct held_lock *this,
 	struct lock_list *uninitialized_var(target_entry);
 
 	root.parent = NULL;
-	root.class = hlock_class(this);
+	root.type = hlock_type(this);
 	ret = find_usage_backwards(&root, bit, &target_entry);
 	if (ret < 0)
 		return print_bfs_bug(ret);
@@ -3513,7 +3537,7 @@ static int __lock_acquire(struct lockdep_map *lock, unsigned int subclass,
 		chain_key = 0;
 		chain_head = 1;
 	}
-	chain_key = iterate_chain_key(chain_key, class_idx);
+	chain_key = iterate_chain_key(chain_key, lock_type(class_idx, read));
 
 	if (nest_lock && !__lock_is_held(nest_lock, -1))
 		return print_lock_nested_lock_not_held(curr, hlock, ip);
@@ -4318,7 +4342,7 @@ static void zap_class(struct lock_class *class)
 	 * involved in:
 	 */
 	for (i = 0; i < nr_list_entries; i++) {
-		if (list_entries[i].class == class)
+		if (lock_t2c(list_entries[i].type) == class)
 			list_del_rcu(&list_entries[i].entry);
 	}
 	/*

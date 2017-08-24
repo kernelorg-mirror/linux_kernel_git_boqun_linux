@@ -83,8 +83,8 @@ static int l_show(struct seq_file *m, void *v)
 
 	list_for_each_entry(entry, &class->locks_after, entry) {
 		if (entry->distance == 1) {
-			seq_printf(m, " -> [%p] ", entry->class->key);
-			print_name(m, entry->class);
+			seq_printf(m, " -> [%p] ", lock_t2c(entry->type)->key);
+			print_name(m, lock_t2c(entry->type));
 			seq_puts(m, "\n");
 		}
 	}
