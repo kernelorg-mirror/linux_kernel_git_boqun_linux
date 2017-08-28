@@ -871,7 +871,7 @@ static struct lock_list *alloc_list_entry(void)
  * Add a new dependency to the head of the list:
  */
 static int add_lock_to_list(struct lock_class *this, struct list_head *head,
-			    unsigned long ip, int distance,
+			    unsigned long ip, int distance, unsigned int dep,
 			    struct stack_trace *trace)
 {
 	struct lock_list *entry;
@@ -884,6 +884,7 @@ static int add_lock_to_list(struct lock_class *this, struct list_head *head,
 		return 0;
 
 	entry->class = this;
+	entry->dep = dep;
 	entry->distance = distance;
 	entry->trace = *trace;
 	/*
@@ -1028,6 +1029,58 @@ static inline bool bfs_error(enum bfs_result res)
 	return res < 0;
 }
 
+#define DEP_NN_BIT 0
+#define DEP_RN_BIT 1
+#define DEP_NR_BIT 2
+#define DEP_RR_BIT 3
+
+#define DEP_NN_MASK (1U << (DEP_NN_BIT))
+#define DEP_RN_MASK (1U << (DEP_RN_BIT))
+#define DEP_NR_MASK (1U << (DEP_NR_BIT))
+#define DEP_RR_MASK (1U << (DEP_RR_BIT))
+
+static inline unsigned int __calc_dep_bit(int prev, int next)
+{
+	if (prev == 2 && next != 2)
+		return DEP_RN_BIT;
+	if (prev != 2 && next == 2)
+		return DEP_NR_BIT;
+	if (prev == 2 && next == 2)
+		return DEP_RR_BIT;
+	else
+		return DEP_NN_BIT;
+}
+
+static inline unsigned int calc_dep(int prev, int next)
+{
+	return 1U << __calc_dep_bit(prev, next);
+}
+
+/*
+ * return -1 if no proper dependency could be picked
+ * return 0 if a * --> N dependency could be picked
+ * return 1 if only a * --> R dependency could be picked
+ *
+ * N: non-recursive lock
+ * R: recursive read lock
+ */
+static inline int pick_dep(u16 is_rr, u16 cap_dep)
+{
+	if (is_rr) { /* could only pick N --> */
+		if (cap_dep & DEP_NN_MASK)
+			return 0;
+		else if (cap_dep & DEP_NR_MASK)
+			return 1;
+		else
+			return -1;
+	} else {
+		if (cap_dep & DEP_NN_MASK || cap_dep & DEP_RN_MASK)
+			return 0;
+		else
+			return 1;
+	}
+}
+
 static enum bfs_result __bfs(struct lock_list *source_entry,
 			     void *data,
 			     int (*match)(struct lock_list *entry, void *data),
@@ -1038,6 +1091,7 @@ static enum bfs_result __bfs(struct lock_list *source_entry,
 	struct list_head *head;
 	struct circular_queue *cq = &lock_cq;
 	enum bfs_result ret = BFS_RNOMATCH;
+	int is_rr, next_is_rr;
 
 	if (match(source_entry, data)) {
 		*target_entry = source_entry;
@@ -1071,11 +1125,20 @@ static enum bfs_result __bfs(struct lock_list *source_entry,
 		else
 			head = &lock->class->locks_before;
 
+		is_rr = lock->is_rr;
+
 		DEBUG_LOCKS_WARN_ON(!irqs_disabled());
 
 		list_for_each_entry_rcu(entry, head, entry) {
 			if (!lock_accessed(entry)) {
 				unsigned int cq_depth;
+
+				next_is_rr = pick_dep(is_rr, entry->dep);
+
+				if (next_is_rr < 0)
+					continue;
+
+				entry->is_rr = next_is_rr;
 				mark_lock_accessed(entry, lock);
 				if (match(entry, data)) {
 					*target_entry = entry;
@@ -1367,7 +1430,7 @@ unsigned long lockdep_count_backward_deps(struct lock_class *class)
 }
 
 /*
- * Prove that the dependency graph starting at <entry> can not
+ * Prove that the dependency graph starting at <root> can not
  * lead to <target>. Print an error and return BFS_RMATCH if it does.
  */
 static noinline enum bfs_result
@@ -1913,8 +1976,10 @@ check_prev_add(struct task_struct *curr, struct held_lock *prev,
 	 */
 	this.class = hlock_class(next);
 	this.parent = NULL;
+	this.is_rr = (next->read == 2);
 	ret = check_noncircular(&this, hlock_class(prev), &target_entry);
-	if (unlikely(ret == BFS_RMATCH))
+	if (unlikely(ret == BFS_RMATCH) &&
+	    (prev->read != 2 || !target_entry->is_rr))
 		return print_circular_bug(&this, target_entry, next, prev, trace);
 	else if (unlikely(bfs_error(ret)))
 		return print_bfs_bug(ret);
@@ -1922,16 +1987,6 @@ check_prev_add(struct task_struct *curr, struct held_lock *prev,
 	if (!check_prev_add_irq(curr, prev, next))
 		return 0;
 
-	/*
-	 * For recursive read-locks we do all the dependency checks,
-	 * but we dont store read-triggered dependencies (only
-	 * write-triggered dependencies). This ensures that only the
-	 * write-side dependencies matter, and that if for example a
-	 * write-lock never takes any other locks, then the reads are
-	 * equivalent to a NOP.
-	 */
-	if (next->read == 2 || prev->read == 2)
-		return 1;
 	/*
 	 * Is the <prev> -> <next> dependency already present?
 	 *
@@ -1944,6 +1999,7 @@ check_prev_add(struct task_struct *curr, struct held_lock *prev,
 		if (entry->class == hlock_class(next)) {
 			if (distance == 1)
 				entry->distance = 1;
+			entry->dep |= calc_dep(prev->read, next->read);
 			return 1;
 		}
 	}
@@ -1953,6 +2009,7 @@ check_prev_add(struct task_struct *curr, struct held_lock *prev,
 	 */
 	this.class = hlock_class(prev);
 	this.parent = NULL;
+	this.is_rr = (prev->read == 2);
 	ret = check_redundant(&this, hlock_class(next), &target_entry);
 	if (ret == BFS_RMATCH) {
 		debug_atomic_inc(nr_redundant);
@@ -1971,14 +2028,18 @@ check_prev_add(struct task_struct *curr, struct held_lock *prev,
 	 */
 	ret = add_lock_to_list(hlock_class(next),
 			       &hlock_class(prev)->locks_after,
-			       next->acquire_ip, distance, trace);
+			       next->acquire_ip, distance,
+			       calc_dep(prev->read, next->read),
+			       trace);
 
 	if (!ret)
 		return 0;
 
 	ret = add_lock_to_list(hlock_class(prev),
 			       &hlock_class(next)->locks_before,
-			       next->acquire_ip, distance, trace);
+			       next->acquire_ip, distance,
+			       calc_dep(next->read, prev->read),
+			       trace);
 	if (!ret)
 		return 0;
 
@@ -2040,7 +2101,7 @@ check_prevs_add(struct task_struct *curr, struct held_lock *next)
 			 * Only non-recursive-read entries get new dependencies
 			 * added:
 			 */
-			if (hlock->read != 2 && hlock->check) {
+			if (hlock->check) {
 				int ret = check_prev_add(curr, hlock, next,
 							 distance, &trace, save);
 				if (!ret)
