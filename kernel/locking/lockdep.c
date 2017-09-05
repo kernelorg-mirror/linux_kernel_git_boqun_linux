@@ -859,7 +859,7 @@ static struct lock_list *alloc_list_entry(void)
  * Add a new dependency to the head of the list:
  */
 static int add_lock_to_list(struct lock_class *this, struct list_head *head,
-			    unsigned long ip, u16 distance,
+			    unsigned long ip, u16 distance, u8 dep,
 			    struct stack_trace *trace)
 {
 	struct lock_list *entry;
@@ -872,6 +872,7 @@ static int add_lock_to_list(struct lock_class *this, struct list_head *head,
 		return 0;
 
 	entry->class = this;
+	entry->dep = dep;
 	entry->distance = distance;
 	entry->trace = *trace;
 	/*
@@ -1010,6 +1011,41 @@ enum bfs_result {
 static inline bool bfs_error(enum bfs_result res)
 {
 	return res < 0;
+}
+
+/*
+ * DEP_*_BIT in lock_list::dep
+ *
+ * For dependency @prev -> @next:
+ *
+ *   RR: both @prev and @next are recursive read locks, i.e. ->read == 2.
+ *   NR: @prev is a non-recursive and @next is recursive.
+ *   RN: @prev is recursive and @next is non-recursive.
+ *   NN: both @prev and @next are non-recursive.
+ *
+ * Note that we define the value of DEP_*_BITs so that:
+ *   bit0 is prev->read != 2
+ *   bit1 is next->read != 2
+ */
+#define DEP_RR_BIT (0 + (0 << 1)) /* 0 */
+#define DEP_NR_BIT (1 + (0 << 1)) /* 1 */
+#define DEP_RN_BIT (0 + (1 << 1)) /* 2 */
+#define DEP_NN_BIT (1 + (1 << 1)) /* 3 */
+
+#define DEP_RR_MASK (1U << (DEP_RR_BIT))
+#define DEP_NR_MASK (1U << (DEP_NR_BIT))
+#define DEP_RN_MASK (1U << (DEP_RN_BIT))
+#define DEP_NN_MASK (1U << (DEP_NN_BIT))
+
+static inline unsigned int
+__calc_dep_bit(struct held_lock *prev, struct held_lock *next)
+{
+	return (prev->read != 2) + ((next->read != 2) << 1);
+}
+
+static inline u8 calc_dep(struct held_lock *prev, struct held_lock *next)
+{
+	return 1U << __calc_dep_bit(prev, next);
 }
 
 static enum bfs_result __bfs(struct lock_list *source_entry,
@@ -1921,7 +1957,35 @@ check_prev_add(struct task_struct *curr, struct held_lock *prev,
 		if (entry->class == hlock_class(next)) {
 			if (distance == 1)
 				entry->distance = 1;
-			return 1;
+			entry->dep |= calc_dep(prev, next);
+
+			/*
+			 * Also, update the reverse dependency in @next's
+			 * ->locks_before list.
+			 *
+			 *  Here we reuse @entry as the cursor, which is fine
+			 *  because we won't go to the next iteration of the
+			 *  outer loop:
+			 *
+			 *  For normal cases, we return in the inner loop.
+			 *
+			 *  If we fail to return, we have inconsistency, i.e.
+			 *  <prev>::locks_after contains <next> while
+			 *  <next>::locks_before doesn't contain <prev>. In
+			 *  that case, we return after the inner and indicate
+			 *  something is wrong.
+			 */
+			list_for_each_entry(entry, &hlock_class(next)->locks_before, entry) {
+				if (entry->class == hlock_class(prev)) {
+					if (distance == 1)
+						entry->distance = 1;
+					entry->dep |= calc_dep(next, prev);
+					return 1;
+				}
+			}
+
+			/* <prev> is not found in <next>::locks_before */
+			return 0;
 		}
 	}
 
@@ -1948,14 +2012,18 @@ check_prev_add(struct task_struct *curr, struct held_lock *prev,
 	 */
 	ret = add_lock_to_list(hlock_class(next),
 			       &hlock_class(prev)->locks_after,
-			       next->acquire_ip, distance, trace);
+			       next->acquire_ip, distance,
+			       calc_dep(prev, next),
+			       trace);
 
 	if (!ret)
 		return 0;
 
 	ret = add_lock_to_list(hlock_class(prev),
 			       &hlock_class(next)->locks_before,
-			       next->acquire_ip, distance, trace);
+			       next->acquire_ip, distance,
+			       calc_dep(next, prev),
+			       trace);
 	if (!ret)
 		return 0;
 
