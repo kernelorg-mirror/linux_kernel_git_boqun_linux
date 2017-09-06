@@ -1035,6 +1035,89 @@ static inline unsigned int calc_dep(int prev, int next)
 	return 1U << __calc_dep_bit(prev, next);
 }
 
+/*
+ * return -1 if no proper dependency could be picked
+ * return 0 if a -(*N)-> dependency could be picked
+ * return 1 if only a -(*R)-> dependency could be picked
+ *
+ * N: non-recursive lock
+ * R: recursive read lock
+ */
+static inline int pick_dep(u16 is_rr, u16 cap_dep)
+{
+	if (is_rr) { /* could only pick -(N*)-> */
+		if (cap_dep & DEP_NN_MASK)
+			return 0;
+		else if (cap_dep & DEP_NR_MASK)
+			return 1;
+		else
+			return -1;
+	} else {
+		if (cap_dep & DEP_NN_MASK || cap_dep & DEP_RN_MASK)
+			return 0;
+		else
+			return 1;
+	}
+}
+
+/*
+ * Initialize a lock_list entry @lock belonging to @class as the root for a BFS
+ * search.
+ */
+static inline void __bfs_init_root(struct lock_list *lock,
+				   struct lock_class *class)
+{
+	lock->class = class;
+	lock->parent = NULL;
+	lock->is_rr = 0;
+}
+
+/*
+ * Initialize a lock_list entry @lock based on a lock acquisition @hlock as the
+ * root for a BFS search.
+ */
+static inline void bfs_init_root(struct lock_list *lock,
+				 struct held_lock *hlock)
+{
+	__bfs_init_root(lock, hlock_class(hlock));
+	lock->is_rr = (hlock->read == 2);
+}
+
+/*
+ * Breadth-First Search to find a strong path in the dependency graph.
+ *
+ * @source_entry: the source of the path we are searching for.
+ * @data: data used for the second parameter of @match function
+ * @match: match function for the search
+ * @target_entry: pointer to the target of a matched path
+ * @forward: direction of path, the lockdep dependency forward or backward
+ *
+ * We may have multiple edges(considering different kinds of dependencies, e.g.
+ * -(NR)-> and -(RN)->) between two nodes in the dependency graph, which may
+ * undermine the normal BFS algorithm, however, we are lucky because: in the
+ * search, for each pair of adjacent nodes, we can pick the edge greedily:
+ *
+ * 	Say we have nodes L0, L1 and L2, and we already pick edge from L0 to
+ * 	L1, and we are going to pick the edge from L1 to L2, because we are
+ * 	picking edges to *strong* path, that means if we pick -(*R)-> for L0 to
+ * 	L1 (i.e. we pick L0 -(*R)-> L1), we can not pick any L1 -(R*)-> L2.
+ *
+ * 	And if we pick L0 -(NR)-> L1, and we have edge 1) L1-(NR)->L2 and 2)
+ * 	L1-(NN)->L2, we can greedily pick edge 2) for the path searching,
+ * 	because a) if ...->L0-(NR)->L1-(NR)->L2->... could cause a deadlock,
+ * 	then so does ...->L0->(NR)->L1-(NN)->L2->... and b) picking 2) means we
+ * 	can pick any kinds of edge for L2 to the next node, so we can search
+ * 	more deadlock cases then picking 1).
+ *
+ * So we have two rules of picking edges in BFS:
+ *
+ * "strong": if the previous edge we pick is -(*R)->, we must pick -(N*)->,
+ *           otherwise, we can pick any kind.
+ * "greedy": if we can pick -(*R)-> or -(*N)-> (if both of them satisfies the
+ *           "strong" rule), we always pick -(*N)-> ones.
+ *
+ * And that's how pick_dep() is implemeneted.
+ */
 static enum bfs_result __bfs(struct lock_list *source_entry,
 			     void *data,
 			     int (*match)(struct lock_list *entry, void *data),
@@ -1045,6 +1128,7 @@ static enum bfs_result __bfs(struct lock_list *source_entry,
 	struct list_head *head;
 	struct circular_queue *cq = &lock_cq;
 	enum bfs_result ret = BFS_RNOMATCH;
+	int is_rr, next_is_rr;
 
 	if (match(source_entry, data)) {
 		*target_entry = source_entry;
@@ -1090,10 +1174,17 @@ static enum bfs_result __bfs(struct lock_list *source_entry,
 		else
 			head = &lock->class->locks_before;
 
+		is_rr = lock->is_rr;
+
 		DEBUG_LOCKS_WARN_ON(!irqs_disabled());
 
 		list_for_each_entry_rcu(entry, head, entry) {
 			unsigned int cq_depth;
+
+			next_is_rr = pick_dep(is_rr, entry->dep);
+			if (next_is_rr < 0)
+				continue;
+			entry->is_rr = next_is_rr;
 
 			visit_lock_entry(entry, lock);
 			if (match(entry, data)) {
@@ -1321,8 +1412,7 @@ unsigned long lockdep_count_forward_deps(struct lock_class *class)
 	unsigned long ret, flags;
 	struct lock_list this;
 
-	this.parent = NULL;
-	this.class = class;
+	__bfs_init_root(&this, class);
 
 	local_irq_save(flags);
 	arch_spin_lock(&lockdep_lock);
@@ -1348,8 +1438,7 @@ unsigned long lockdep_count_backward_deps(struct lock_class *class)
 	unsigned long ret, flags;
 	struct lock_list this;
 
-	this.parent = NULL;
-	this.class = class;
+	__bfs_init_root(&this, class);
 
 	local_irq_save(flags);
 	arch_spin_lock(&lockdep_lock);
@@ -1636,17 +1725,14 @@ check_usage(struct task_struct *curr, struct held_lock *prev,
 	struct lock_list *uninitialized_var(target_entry);
 	struct lock_list *uninitialized_var(target_entry1);
 
-	this.parent = NULL;
-
-	this.class = hlock_class(prev);
+	bfs_init_root(&this, prev);
 	ret = find_usage_backwards(&this, bit_backwards, &target_entry);
 	if (bfs_error(ret))
 		return print_bfs_bug(ret);
 	if (ret == BFS_RNOMATCH)
 		return 1;
 
-	that.parent = NULL;
-	that.class = hlock_class(next);
+	bfs_init_root(&that, next);
 	ret = find_usage_forwards(&that, bit_forwards, &target_entry1);
 	if (bfs_error(ret))
 		return print_bfs_bug(ret);
@@ -1902,8 +1988,7 @@ check_prev_add(struct task_struct *curr, struct held_lock *prev,
 	 * We are using global variables to control the recursion, to
 	 * keep the stackframe size of the recursive functions low:
 	 */
-	this.class = hlock_class(next);
-	this.parent = NULL;
+	bfs_init_root(&this, next);
 	ret = check_noncircular(&this, hlock_class(prev), &target_entry);
 	if (unlikely(ret == BFS_RMATCH)) {
 		if (!trace->entries) {
@@ -1961,8 +2046,7 @@ check_prev_add(struct task_struct *curr, struct held_lock *prev,
 	/*
 	 * Is the <prev> -> <next> link redundant?
 	 */
-	this.class = hlock_class(prev);
-	this.parent = NULL;
+	bfs_init_root(&this, prev);
 	ret = check_redundant(&this, hlock_class(next), &target_entry);
 	if (ret == BFS_RMATCH) {
 		debug_atomic_inc(nr_redundant);
@@ -2705,8 +2789,7 @@ check_usage_forwards(struct task_struct *curr, struct held_lock *this,
 	struct lock_list root;
 	struct lock_list *uninitialized_var(target_entry);
 
-	root.parent = NULL;
-	root.class = hlock_class(this);
+	bfs_init_root(&root, this);
 	ret = find_usage_forwards(&root, bit, &target_entry);
 	if (bfs_error(ret))
 		return print_bfs_bug(ret);
@@ -2729,8 +2812,7 @@ check_usage_backwards(struct task_struct *curr, struct held_lock *this,
 	struct lock_list root;
 	struct lock_list *uninitialized_var(target_entry);
 
-	root.parent = NULL;
-	root.class = hlock_class(this);
+	bfs_init_root(&root, this);
 	ret = find_usage_backwards(&root, bit, &target_entry);
 	if (bfs_error(ret))
 		return print_bfs_bug(ret);
