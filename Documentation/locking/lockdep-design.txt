@@ -30,9 +30,9 @@ State
 The validator tracks lock-class usage history into 4n + 1 separate state bits:
 
 - 'ever held in STATE context'
-- 'ever held as readlock in STATE context'
+- 'ever held as recursive readlock in STATE context'
 - 'ever held with STATE enabled'
-- 'ever held as readlock with STATE enabled'
+- 'ever held as recurisve readlock with STATE enabled'
 
 Where STATE can be either one of (kernel/locking/lockdep_states.h)
  - hardirq
@@ -51,7 +51,7 @@ locking error messages, inside curlies. A contrived example:
     (&sio_locks[i].lock){-.-...}, at: [<c02867fd>] mutex_lock+0x21/0x24
 
 
-The bit position indicates STATE, STATE-read, for each of the states listed
+The bit position indicates STATE, STATE-RR, for each of the states listed
 above, and the character displayed in each indicates:
 
    '.'  acquired while irqs disabled and not in irq context
