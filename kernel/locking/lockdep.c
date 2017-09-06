@@ -447,10 +447,10 @@ DEFINE_PER_CPU(struct lockdep_stats, lockdep_stats);
  */
 
 #define __USAGE(__STATE)						\
-	[LOCK_USED_IN_##__STATE] = "IN-"__stringify(__STATE)"-W",	\
-	[LOCK_ENABLED_##__STATE] = __stringify(__STATE)"-ON-W",		\
-	[LOCK_USED_IN_##__STATE##_READ] = "IN-"__stringify(__STATE)"-R",\
-	[LOCK_ENABLED_##__STATE##_READ] = __stringify(__STATE)"-ON-R",
+	[LOCK_USED_IN_##__STATE] = "IN-"__stringify(__STATE),		\
+	[LOCK_ENABLED_##__STATE] = __stringify(__STATE)"-ON",		\
+	[LOCK_USED_IN_##__STATE##_RR] = "IN-"__stringify(__STATE)"-RR",	\
+	[LOCK_ENABLED_##__STATE##_RR] = __stringify(__STATE)"-ON-RR",
 
 static const char *usage_str[] =
 {
@@ -491,7 +491,7 @@ void get_usage_chars(struct lock_class *class, char usage[LOCK_USAGE_CHARS])
 
 #define LOCKDEP_STATE(__STATE) 						\
 	usage[i++] = get_usage_char(class, LOCK_USED_IN_##__STATE);	\
-	usage[i++] = get_usage_char(class, LOCK_USED_IN_##__STATE##_READ);
+	usage[i++] = get_usage_char(class, LOCK_USED_IN_##__STATE##_RR);
 #include "lockdep_states.h"
 #undef LOCKDEP_STATE
 
@@ -1640,7 +1640,7 @@ static const char *state_names[] = {
 
 static const char *state_rnames[] = {
 #define LOCKDEP_STATE(__STATE) \
-	__stringify(__STATE)"-READ",
+	__stringify(__STATE)"-RR",
 #include "lockdep_states.h"
 #undef LOCKDEP_STATE
 };
@@ -3034,14 +3034,14 @@ static int mark_irqflags(struct task_struct *curr, struct held_lock *hlock)
 	 * mark the lock as used in these contexts:
 	 */
 	if (!hlock->trylock) {
-		if (hlock->read) {
+		if (hlock->read == 2) {
 			if (curr->hardirq_context)
 				if (!mark_lock(curr, hlock,
-						LOCK_USED_IN_HARDIRQ_READ))
+						LOCK_USED_IN_HARDIRQ_RR))
 					return 0;
 			if (curr->softirq_context)
 				if (!mark_lock(curr, hlock,
-						LOCK_USED_IN_SOFTIRQ_READ))
+						LOCK_USED_IN_SOFTIRQ_RR))
 					return 0;
 		} else {
 			if (curr->hardirq_context)
@@ -3053,13 +3053,13 @@ static int mark_irqflags(struct task_struct *curr, struct held_lock *hlock)
 		}
 	}
 	if (!hlock->hardirqs_off) {
-		if (hlock->read) {
+		if (hlock->read == 2) {
 			if (!mark_lock(curr, hlock,
-					LOCK_ENABLED_HARDIRQ_READ))
+					LOCK_ENABLED_HARDIRQ_RR))
 				return 0;
 			if (curr->softirqs_enabled)
 				if (!mark_lock(curr, hlock,
-						LOCK_ENABLED_SOFTIRQ_READ))
+						LOCK_ENABLED_SOFTIRQ_RR))
 					return 0;
 		} else {
 			if (!mark_lock(curr, hlock,
@@ -3165,9 +3165,9 @@ static int mark_lock(struct task_struct *curr, struct held_lock *this,
 	switch (new_bit) {
 #define LOCKDEP_STATE(__STATE)			\
 	case LOCK_USED_IN_##__STATE:		\
-	case LOCK_USED_IN_##__STATE##_READ:	\
+	case LOCK_USED_IN_##__STATE##_RR:	\
 	case LOCK_ENABLED_##__STATE:		\
-	case LOCK_ENABLED_##__STATE##_READ:
+	case LOCK_ENABLED_##__STATE##_RR:
 #include "lockdep_states.h"
 #undef LOCKDEP_STATE
 		ret = mark_lock_irq(curr, this, new_bit);
