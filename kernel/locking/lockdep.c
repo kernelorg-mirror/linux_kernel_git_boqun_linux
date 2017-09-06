@@ -1333,9 +1333,12 @@ print_circular_bug_header(struct lock_list *entry, unsigned int depth,
 	return 0;
 }
 
-static inline int class_equal(struct lock_list *entry, void *data)
+static inline int hlock_equal(struct lock_list *entry, void *data)
 {
-	return entry->class == data;
+	struct held_lock *hlock = (struct held_lock *)data;
+
+	return hlock_class(hlock) == entry->class &&
+	       (hlock->read == 2 || !entry->is_rr);
 }
 
 static inline int hlock_conflict(struct lock_list *entry, void *data)
@@ -1475,14 +1478,14 @@ check_noncircular(struct lock_list *root, struct held_lock *target,
 }
 
 static noinline enum bfs_result
-check_redundant(struct lock_list *root, struct lock_class *target,
+check_redundant(struct lock_list *root, struct held_lock *target,
 		struct lock_list **target_entry)
 {
 	enum bfs_result result;
 
 	debug_atomic_inc(nr_redundant_checks);
 
-	result = __bfs_forwards(root, target, class_equal, target_entry);
+	result = __bfs_forwards(root, target, hlock_equal, target_entry);
 
 	return result;
 }
@@ -2055,7 +2058,7 @@ check_prev_add(struct task_struct *curr, struct held_lock *prev,
 	 * Is the <prev> -> <next> link redundant?
 	 */
 	bfs_init_root(&this, prev);
-	ret = check_redundant(&this, hlock_class(next), &target_entry);
+	ret = check_redundant(&this, next, &target_entry);
 	if (ret == BFS_RMATCH) {
 		debug_atomic_inc(nr_redundant);
 		return 2;
