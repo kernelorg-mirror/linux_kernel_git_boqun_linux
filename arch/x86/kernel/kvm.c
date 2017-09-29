@@ -117,7 +117,7 @@ static struct kvm_task_sleep_node *_find_apf_task(struct kvm_task_sleep_head *b,
 	return NULL;
 }
 
-void kvm_async_pf_task_wait(u32 token)
+void kvm_async_pf_task_wait(u32 token, int user)
 {
 	u32 key = hash_32(token, KVM_TASK_SLEEP_HASHBITS);
 	struct kvm_task_sleep_head *b = &async_pf_sleepers[key];
@@ -140,7 +140,10 @@ void kvm_async_pf_task_wait(u32 token)
 
 	n.token = token;
 	n.cpu = smp_processor_id();
-	n.halted = is_idle_task(current) || preempt_count() > 1;
+	n.halted = is_idle_task(current) ||
+		   preempt_count() > 1 ||
+		   (!IS_ENABLED(CONFIG_PREEMPT) && !user) ||
+		   rcu_preempt_depth();
 	init_swait_queue_head(&n.wq);
 	hlist_add_head(&n.link, &b->list);
 	raw_spin_unlock(&b->lock);
@@ -268,7 +271,7 @@ do_async_page_fault(struct pt_regs *regs, unsigned long error_code)
 	case KVM_PV_REASON_PAGE_NOT_PRESENT:
 		/* page is swapped out by the host. */
 		prev_state = exception_enter();
-		kvm_async_pf_task_wait((u32)read_cr2());
+		kvm_async_pf_task_wait((u32)read_cr2(), user_mode(regs));
 		exception_exit(prev_state);
 		break;
 	case KVM_PV_REASON_PAGE_READY:
