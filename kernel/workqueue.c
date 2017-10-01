@@ -1997,7 +1997,41 @@ static bool manage_workers(struct worker *worker)
 	maybe_create_worker(pool);
 
 	pool->manager = NULL;
+
+	/*
+	 * Put the manager back to ->idle_list, this allows us to drop the
+	 * pool->lock safely without racing with put_unbound_pool()
+	 *
+	 * 						<in "manager worker" thread>
+	 * 						worker_thread():
+	 * 						  spin_lock_irq(&pool->lock);
+	 * 						  worker_leave_idle();
+	 * 						  manage_workers(): // return true
+	 * 						    mutex_trylock(&pool->manager_arb);
+	 *						    <without entering idle here>
+	 * 						    spin_unlock_irq(&pool->lock);
+	 * 						    mutex_unlock(&pool->manager_arb);
+	 *
+	 * 	put_unbound_pool():
+	 * 	  mutex_lock(&pool->manager_arb);
+	 * 	  spin_lock_irq(&pool->lock);
+	 * 	  <set ILDE worker to DIE>
+	 * 	  <the manager worker is not set to be DIE, because it's not IDLE>
+	 * 	  ...
+	 * 	  wait_for_completion(&pool->detach_completion);
+	 * 	  <no one will complete() because pool->workers is not empty>
+	 *
+	 * 	  					  spin_lock_irq(&pool->lock);
+	 * 	  					  <pool->worklist is empty, go to sleep>
+	 *
+	 * No one is going to wake up the manager worker, even so, it won't
+	 * complete(->detach_completion), since it's not a DIE worker.
+	 *
+	 */
+	worker_enter_idle(worker);
+	spin_unlock_irq(&pool->lock);
 	mutex_unlock(&pool->manager_arb);
+	spin_lock_irq(&pool->lock);
 	return true;
 }
 
@@ -2202,6 +2236,7 @@ static int worker_thread(void *__worker)
 woke_up:
 	spin_lock_irq(&pool->lock);
 
+recheck:
 	/* am I supposed to die? */
 	if (unlikely(worker->flags & WORKER_DIE)) {
 		spin_unlock_irq(&pool->lock);
@@ -2216,7 +2251,6 @@ woke_up:
 	}
 
 	worker_leave_idle(worker);
-recheck:
 	/* no more worker necessary? */
 	if (!need_more_worker(pool))
 		goto sleep;
