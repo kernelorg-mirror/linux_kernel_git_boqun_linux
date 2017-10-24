@@ -186,11 +186,11 @@ struct lock_list {
 	struct list_head		entry;
 	struct lock_class		*class;
 	struct stack_trace		trace;
-	int				distance;
+	u16				distance;
 	/* bitmap of different dependencies from head to this */
-	u16				dep;
+	u8				dep;
 	/* used by BFS to record whether this is picked as a recursive read */
-	u16				is_rr;
+	bool				is_rr;
 
 	/*
 	 * The parent field is used to implement breadth-first search, and the

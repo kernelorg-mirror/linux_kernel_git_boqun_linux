@@ -869,7 +869,7 @@ static struct lock_list *alloc_list_entry(void)
  * Add a new dependency to the head of the list:
  */
 static int add_lock_to_list(struct lock_class *this, struct list_head *head,
-			    unsigned long ip, int distance, unsigned int dep,
+			    unsigned long ip, u16 distance, unsigned int dep,
 			    struct stack_trace *trace)
 {
 	struct lock_list *entry;
@@ -1058,7 +1058,7 @@ static inline unsigned int calc_dep(int prev, int next)
  * N: non-recursive lock
  * R: recursive read lock
  */
-static inline int pick_dep(u16 is_rr, u16 cap_dep)
+static inline int pick_dep(bool is_rr, u8 cap_dep)
 {
 	if (is_rr) { /* could only pick -(N*)-> */
 		if (cap_dep & DEP_NN_MASK)
@@ -1143,7 +1143,8 @@ static enum bfs_result __bfs(struct lock_list *source_entry,
 	struct list_head *head;
 	struct circular_queue *cq = &lock_cq;
 	enum bfs_result ret = BFS_RNOMATCH;
-	int is_rr, next_is_rr;
+	bool is_rr;
+	int next_is_rr;
 
 	if (match(source_entry, data)) {
 		*target_entry = source_entry;
@@ -1199,7 +1200,7 @@ static enum bfs_result __bfs(struct lock_list *source_entry,
 			next_is_rr = pick_dep(is_rr, entry->dep);
 			if (next_is_rr < 0)
 				continue;
-			entry->is_rr = next_is_rr;
+			entry->is_rr = !!next_is_rr;
 
 			visit_lock_entry(entry, lock);
 			if (match(entry, data)) {
@@ -2148,7 +2149,7 @@ check_prevs_add(struct task_struct *curr, struct held_lock *next)
 		goto out_bug;
 
 	for (;;) {
-		int distance = curr->lockdep_depth - depth + 1;
+		u16 distance = curr->lockdep_depth - depth + 1;
 		hlock = curr->held_locks + depth - 1;
 
 		if (hlock->check) {
