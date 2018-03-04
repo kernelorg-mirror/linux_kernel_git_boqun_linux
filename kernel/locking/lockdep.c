@@ -1109,7 +1109,7 @@ static inline void bfs_init_root(struct lock_list *lock,
  */
 static enum bfs_result __bfs(struct lock_list *source_entry,
 			     void *data,
-			     int (*match)(struct lock_list *entry, void *data),
+			     bool (*match)(struct lock_list *entry, void *data),
 			     struct lock_list **target_entry,
 			     int forward)
 {
@@ -1209,7 +1209,7 @@ exit:
 static inline enum bfs_result
 __bfs_forwards(struct lock_list *src_entry,
 	       void *data,
-	       int (*match)(struct lock_list *entry, void *data),
+	       bool (*match)(struct lock_list *entry, void *data),
 	       struct lock_list **target_entry)
 {
 	return __bfs(src_entry, data, match, target_entry, 1);
@@ -1219,7 +1219,7 @@ __bfs_forwards(struct lock_list *src_entry,
 static inline enum bfs_result
 __bfs_backwards(struct lock_list *src_entry,
 		void *data,
-		int (*match)(struct lock_list *entry, void *data),
+		bool (*match)(struct lock_list *entry, void *data),
 		struct lock_list **target_entry)
 {
 	return __bfs(src_entry, data, match, target_entry, 0);
@@ -1333,7 +1333,7 @@ print_circular_bug_header(struct lock_list *entry, unsigned int depth,
 	return 0;
 }
 
-static inline int class_equal(struct lock_list *entry, void *data)
+static inline bool class_equal(struct lock_list *entry, void *data)
 {
 	return entry->class == data;
 }
@@ -1392,10 +1392,10 @@ static noinline int print_bfs_bug(int ret)
 	return 0;
 }
 
-static int noop_count(struct lock_list *entry, void *data)
+static bool noop_count(struct lock_list *entry, void *data)
 {
 	(*(unsigned long *)data)++;
-	return 0;
+	return false;
 }
 
 static unsigned long __lockdep_count_forward_deps(struct lock_list *this)
@@ -1486,7 +1486,7 @@ check_redundant(struct lock_list *root, struct lock_class *target,
  * without creating any illegal irq-safe -> irq-unsafe lock dependency.
  */
 
-static inline int usage_match(struct lock_list *entry, void *bit)
+static inline bool usage_match(struct lock_list *entry, void *bit)
 {
 	return entry->class->usage_mask & (1 << (enum lock_usage_bit)bit);
 }
