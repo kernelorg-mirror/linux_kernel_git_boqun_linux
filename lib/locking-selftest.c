@@ -49,6 +49,7 @@ __setup("debug_locks_verbose=", setup_debug_locks_verbose);
 #define LOCKTYPE_RWSEM	0x8
 #define LOCKTYPE_WW	0x10
 #define LOCKTYPE_RTMUTEX 0x20
+#define LOCKTYPE_SRCU	0x40
 
 static struct ww_acquire_ctx t, t2;
 static struct ww_mutex o, o2, o3;
@@ -84,6 +85,11 @@ static DEFINE_RT_MUTEX(rtmutex_B);
 static DEFINE_RT_MUTEX(rtmutex_C);
 static DEFINE_RT_MUTEX(rtmutex_D);
 
+#endif
+
+#ifdef CONFIG_SRCU
+static struct srcu_struct srcu_A;
+static struct srcu_struct srcu_B;
 #endif
 
 /*
@@ -161,6 +167,11 @@ static void init_shared_classes(void)
 	__rt_mutex_init(&rtmutex_Y2, __func__, &rt_Y);
 	__rt_mutex_init(&rtmutex_Z1, __func__, &rt_Z);
 	__rt_mutex_init(&rtmutex_Z2, __func__, &rt_Z);
+#endif
+
+#ifdef CONFIG_SRCU
+	init_srcu_struct(&srcu_A);
+	init_srcu_struct(&srcu_B);
 #endif
 
 	init_class_X(&lock_X1, &rwlock_X1, &mutex_X1, &rwsem_X1);
@@ -2200,6 +2211,30 @@ static void ww_tests(void)
 	pr_cont("\n");
 }
 
+static void srcu_ABBA(void)
+{
+	int ia, ib;
+
+	ia = srcu_read_lock(&srcu_A);
+	synchronize_srcu(&srcu_B);
+	srcu_read_unlock(&srcu_A, ia);
+
+	ib = srcu_read_lock(&srcu_B);
+	synchronize_srcu(&srcu_A);
+	srcu_read_unlock(&srcu_B, ib); // should fail
+}
+
+static void srcu_tests(void)
+{
+	printk("  --------------------------------------------------------------------------\n");
+	printk("  | SRCU tests |\n");
+	printk("  ---------------\n");
+	print_testname("ABBA read-sync/read-sync");
+	dotest(srcu_ABBA, FAILURE, LOCKTYPE_SRCU);
+	pr_cont("\n");
+}
+
+
 void locking_selftest(void)
 {
 	/*
@@ -2306,6 +2341,7 @@ void locking_selftest(void)
 	DO_TESTCASE_6x2x2RW("irq read-recursion #2", irq_read_recursion2);
 
 	ww_tests();
+	srcu_tests();
 
 	if (unexpected_testcase_failures) {
 		printk("-----------------------------------------------------------------\n");
