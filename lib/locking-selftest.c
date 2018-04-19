@@ -2224,6 +2224,18 @@ static void srcu_ABBA(void)
 	srcu_read_unlock(&srcu_B, ib); // should fail
 }
 
+static void srcu_inversion(void)
+{
+	int ia;
+
+	HARDIRQ_ENTER();
+	ia = srcu_read_lock(&srcu_A);
+	srcu_read_unlock(&srcu_A, ia);
+	HARDIRQ_EXIT();
+
+	synchronize_srcu(&srcu_A); // should not fail
+}
+
 static void srcu_tests(void)
 {
 	printk("  --------------------------------------------------------------------------\n");
@@ -2231,6 +2243,10 @@ static void srcu_tests(void)
 	printk("  ---------------\n");
 	print_testname("ABBA read-sync/read-sync");
 	dotest(srcu_ABBA, FAILURE, LOCKTYPE_SRCU);
+	pr_cont("\n");
+
+	print_testname("irq inversion");
+	dotest(srcu_inversion, SUCCESS, LOCKTYPE_SRCU);
 	pr_cont("\n");
 }
 
