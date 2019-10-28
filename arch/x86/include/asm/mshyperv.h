@@ -243,6 +243,14 @@ bool hv_vcpu_is_preempted(int vcpu);
 static inline void hv_apic_init(void) {}
 #endif
 
+#if IS_ENABLED(CONFIG_PCI_HYPERV)
+#define hv_set_msi_address_from_desc(msi_entry, msi_desc)	\
+do {								\
+	(msi_entry)->address = (msi_desc)->msg.address_lo;	\
+} while (0)
+
+#endif /* CONFIG_PCI_HYPERV */
+
 #else /* CONFIG_HYPERV */
 static inline void hyperv_init(void) {}
 static inline void hyperv_setup_mmu_ops(void) {}
