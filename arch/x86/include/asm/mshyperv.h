@@ -4,9 +4,11 @@
 
 #include <linux/types.h>
 #include <linux/nmi.h>
+#include <linux/msi.h>
 #include <asm/io.h>
 #include <asm/hyperv-tlfs.h>
 #include <asm/nospec-branch.h>
+#include <asm/msi.h>
 
 typedef int (*hyperv_fill_flush_list_func)(
 		struct hv_guest_mapping_flush_list *flush,
@@ -248,6 +250,39 @@ static inline void hv_apic_init(void) {}
 do {								\
 	(msi_entry)->address = (msi_desc)->msg.address_lo;	\
 } while (0)
+
+#define hv_msi_handler		handle_edge_irq
+#define hv_msi_handler_name	"edge"
+#define hv_msi_prepare		pci_msi_prepare
+#define hv_msi_set_desc		pci_msi_set_desc
+
+/* Returns the Hyper-V PCI parent MSI vector domain. */
+static inline struct irq_domain *hv_msi_parent_vector_domain(void)
+{
+	return x86_vector_domain;
+}
+
+/* Returns the interrupt vector mapped to the given IRQ. */
+static inline unsigned int hv_msi_get_int_vector(struct irq_data *data)
+{
+	struct irq_cfg *cfg = irqd_cfg(data);
+
+	return cfg->vector;
+}
+
+/* Return the H/W interrupt vector mapped to the given MSI. */
+static inline irq_hw_number_t
+hv_msi_domain_ops_get_hwirq(struct msi_domain_info *info,
+			    msi_alloc_info_t *arg)
+{
+	return arg->msi_hwirq;
+}
+
+/* Get the IRQ delivery mode .*/
+static inline u8 hv_msi_irq_delivery_mode(void)
+{
+	return dest_Fixed;
+}
 
 #endif /* CONFIG_PCI_HYPERV */
 
