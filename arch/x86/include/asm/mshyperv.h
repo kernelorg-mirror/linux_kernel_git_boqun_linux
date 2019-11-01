@@ -284,6 +284,13 @@ static inline u8 hv_msi_irq_delivery_mode(void)
 	return dest_Fixed;
 }
 
+/* Architecture specific Hyper-V PCI MSI initialization and cleanup routines */
+static inline int hv_pci_arch_init(void)
+{
+	return 0;
+}
+
+static inline void hv_pci_arch_free(void) {}
 #endif /* CONFIG_PCI_HYPERV */
 
 #else /* CONFIG_HYPERV */
