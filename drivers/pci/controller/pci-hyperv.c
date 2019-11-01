@@ -3079,6 +3079,7 @@ static struct hv_driver hv_pci_drv = {
 static void __exit exit_hv_pci_drv(void)
 {
 	vmbus_driver_unregister(&hv_pci_drv);
+	hv_pci_arch_free();
 
 	hvpci_block_ops.read_block = NULL;
 	hvpci_block_ops.write_block = NULL;
@@ -3087,8 +3088,14 @@ static void __exit exit_hv_pci_drv(void)
 
 static int __init init_hv_pci_drv(void)
 {
+	int ret;
+
 	/* Set the invalid domain number's bit, so it will not be used */
 	set_bit(HVPCI_DOM_INVALID, hvpci_dom_map);
+
+	ret = hv_pci_arch_init();
+	if (ret)
+		return ret;
 
 	/* Initialize PCI block r/w interface */
 	hvpci_block_ops.read_block = hv_read_config_block;
