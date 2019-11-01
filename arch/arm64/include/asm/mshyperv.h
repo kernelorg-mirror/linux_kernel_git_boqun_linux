@@ -107,6 +107,14 @@ extern void hv_get_vpreg_128(u32 reg, struct hv_get_vp_register_output *result);
 #define hv_get_raw_timer() arch_timer_read_counter()
 #endif
 
+#if IS_ENABLED(CONFIG_PCI_HYPERV)
+#define hv_set_msi_address_from_desc(msi_entry, msi_desc)				\
+do {											\
+	(msi_entry)->address =								\
+		((u64)msi_desc->msg.address_hi << 32) | msi_desc->msg.address_lo;	\
+} while (0)
+#endif /* CONFIG_PCI_HYPERV */
+
 #include <asm-generic/mshyperv.h>
 
 #endif
