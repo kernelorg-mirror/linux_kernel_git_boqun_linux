@@ -1457,7 +1457,7 @@ static void hv_irq_mask(struct irq_data *data)
 }
 
 /**
- * hv_irq_unmask() - "Unmask" the IRQ by setting its current
+ * __hv_irq_unmask() - "Unmask" the IRQ by setting its current
  * affinity.
  * @data:	Describes the IRQ
  *
@@ -1466,7 +1466,7 @@ static void hv_irq_mask(struct irq_data *data)
  * is built out of this PCI bus's instance GUID and the function
  * number of the device.
  */
-static void hv_irq_unmask(struct irq_data *data)
+static void __hv_irq_unmask(struct irq_data *data)
 {
 	struct msi_desc *msi_desc = irq_data_get_msi_desc(data);
 	struct hv_retarget_device_interrupt *params;
@@ -1569,6 +1569,13 @@ exit_unlock:
 	if (!hv_result_success(res) && hbus->state != hv_pcibus_removing)
 		dev_err(&hbus->hdev->device,
 			"%s() failed: %#llx", __func__, res);
+}
+
+static void hv_irq_unmask(struct irq_data *data)
+{
+	/* Only use a hypercall on x86 */
+	if (IS_ENABLED(CONFIG_X86))
+		__hv_irq_unmask(data);
 
 	if (data->parent_data->chip->irq_unmask)
 		irq_chip_unmask_parent(data);
