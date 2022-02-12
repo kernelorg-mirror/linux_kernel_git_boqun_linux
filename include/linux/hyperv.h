@@ -1763,5 +1763,7 @@ static inline unsigned long virt_to_hvpfn(void *addr)
 #define HVPFN_UP(x)	(((x) + HV_HYP_PAGE_SIZE-1) >> HV_HYP_PAGE_SHIFT)
 #define HVPFN_DOWN(x)	((x) >> HV_HYP_PAGE_SHIFT)
 #define page_to_hvpfn(page)	(page_to_pfn(page) * NR_HV_HYP_PAGES_IN_PAGE)
+/* Caller need to ensure that 'hvpfn` is aligned to PAGE_SIZE */
+#define hvpfn_to_pfn(hvpfn)	((hvpfn) / NR_HV_HYP_PAGES_IN_PAGE)
 
 #endif /* _HYPERV_H */

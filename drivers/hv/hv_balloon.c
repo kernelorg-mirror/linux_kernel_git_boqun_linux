@@ -500,7 +500,7 @@ enum hv_dm_state {
 static __u8 recv_buffer[HV_HYP_PAGE_SIZE];
 static __u8 balloon_up_send_buffer[HV_HYP_PAGE_SIZE];
 #define PAGES_IN_2M (2 * 1024 * 1024 / PAGE_SIZE)
-#define HA_CHUNK (128 * 1024 * 1024 / PAGE_SIZE)
+#define HA_CHUNK (memory_block_size_bytes() / PAGE_SIZE)
 
 struct hv_dynmem_device {
 	struct hv_device *dev;
@@ -986,6 +986,7 @@ static void hot_add_req(struct work_struct *dummy)
 #ifdef CONFIG_MEMORY_HOTPLUG
 	unsigned long pg_start, pfn_cnt;
 	unsigned long rg_start, rg_sz;
+	unsigned long page_count = 0;
 #endif
 	struct hv_dynmem_device *dm = &dm_device;
 
@@ -994,11 +995,11 @@ static void hot_add_req(struct work_struct *dummy)
 	resp.hdr.size = sizeof(struct dm_hot_add_response);
 
 #ifdef CONFIG_MEMORY_HOTPLUG
-	pg_start = dm->ha_wrk.ha_page_range.finfo.start_page;
-	pfn_cnt = dm->ha_wrk.ha_page_range.finfo.page_cnt;
+	pg_start = hvpfn_to_pfn(dm->ha_wrk.ha_page_range.finfo.start_page);
+	pfn_cnt = hvpfn_to_pfn(dm->ha_wrk.ha_page_range.finfo.page_cnt);
 
-	rg_start = dm->ha_wrk.ha_region_range.finfo.start_page;
-	rg_sz = dm->ha_wrk.ha_region_range.finfo.page_cnt;
+	rg_start = hvpfn_to_pfn(dm->ha_wrk.ha_region_range.finfo.start_page);
+	rg_sz = hvpfn_to_pfn(dm->ha_wrk.ha_region_range.finfo.page_cnt);
 
 	if ((rg_start == 0) && (!dm->host_specified_ha_region)) {
 		unsigned long region_size;
@@ -1022,10 +1023,11 @@ static void hot_add_req(struct work_struct *dummy)
 	}
 
 	if (do_hot_add)
-		resp.page_count = process_hot_add(pg_start, pfn_cnt,
+		page_count = process_hot_add(pg_start, pfn_cnt,
 						rg_start, rg_sz);
 
-	dm->num_pages_added += resp.page_count;
+	dm->num_pages_added += page_count;
+	resp.page_count = (__u32)(page_count * NR_HV_HYP_PAGES_IN_PAGE);
 #endif
 	/*
 	 * The result field of the response structure has the
@@ -1746,9 +1748,16 @@ static int balloon_connect_vsp(struct hv_device *dev)
 
 	/*
 	 * Specify our alignment requirements as it relates
-	 * memory hot-add. Specify 128MB alignment.
+	 * memory hot-add. The alignment should be the same as the memory block
+	 * size, and Hyper-V expects 2 ^ hot_add_alignment * 1MB is the
+	 * alignment in bytes.
 	 */
-	cap_msg.caps.cap_bits.hot_add_alignment = 7;
+	/*
+	 * XXX: memory_block_size_bytes() for ARM64 only is only implemented
+	 * when CONFIG_MEMORY_HOTPLUG=y, and for x86, it doesn't get exported
+	 */
+	cap_msg.caps.cap_bits.hot_add_alignment =
+		count_trailing_zeros(memory_block_size_bytes() / 0x100000);
 
 	/*
 	 * Currently the host does not use these
