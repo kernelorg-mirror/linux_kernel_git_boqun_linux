@@ -17,6 +17,11 @@ use core::{
     ptr,
 };
 
+pub mod thread;
+
+#[doc(inline)]
+pub use thread::{Thread, ThreadNew};
+
 /// A sentinel value used for infinite timeouts.
 pub const MAX_SCHEDULE_TIMEOUT: c_long = c_long::MAX;
 
