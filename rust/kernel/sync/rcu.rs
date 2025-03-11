@@ -94,6 +94,11 @@ impl<P: ForeignOwnable> Rcu<P> {
         Self(Atomic::new(p.into_foreign()), PhantomData)
     }
 
+    /// Creates a null RCU pointer.
+    pub const fn null() -> Self {
+        Self(Atomic::new(core::ptr::null_mut()), PhantomData)
+    }
+
     /// Dereferences the protected object.
     ///
     /// Returns `Some(b)`, where `b` is a reference-like borrowed type, if the pointer is not null,
