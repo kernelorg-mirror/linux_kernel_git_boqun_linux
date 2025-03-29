@@ -1072,6 +1072,9 @@ KBUILD_CFLAGS += -fmin-function-alignment=$(CONFIG_FUNCTION_ALIGNMENT)
 else
 KBUILD_CFLAGS += -falign-functions=$(CONFIG_FUNCTION_ALIGNMENT)
 endif
+ifdef CONFIG_RUSTC_HAS_MIN_FUNCTION_ALIGNMENT
+KBUILD_RUSTFLAGS += -Zmin-function-alignment=$(CONFIG_FUNCTION_ALIGNMENT)
+endif
 endif
 
 # arch Makefile may override CC so keep this after arch Makefile is included
