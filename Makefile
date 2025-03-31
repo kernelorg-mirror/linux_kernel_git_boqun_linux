@@ -998,6 +998,8 @@ endif
 export CC_FLAGS_FTRACE
 KBUILD_CFLAGS	+= $(CC_FLAGS_FTRACE) $(CC_FLAGS_USING)
 KBUILD_AFLAGS	+= $(CC_FLAGS_USING)
+export RUSTC_FLAGS_FTRACE
+KBUILD_RUSTFLAGS += $(RUSTC_FLAGS_FTRACE)
 endif
 
 # We trigger additional mismatches with less inlining
