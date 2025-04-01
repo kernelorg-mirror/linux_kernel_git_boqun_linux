@@ -53,7 +53,7 @@ bool kthread_is_per_cpu(struct task_struct *k);
 	struct task_struct *__k						   \
 		= kthread_create(threadfn, data, namefmt, ## __VA_ARGS__); \
 	if (!IS_ERR(__k))						   \
-		wake_up_process(__k);					   \
+		kthread_start(__k);					   \
 	__k;								   \
 })
 
@@ -87,6 +87,7 @@ void kthread_bind(struct task_struct *k, unsigned int cpu);
 void kthread_bind_mask(struct task_struct *k, const struct cpumask *mask);
 int kthread_affine_preferred(struct task_struct *p, const struct cpumask *mask);
 int kthread_stop(struct task_struct *k);
+void kthread_start(struct task_struct *k);
 int kthread_stop_put(struct task_struct *k);
 bool kthread_should_stop(void);
 bool kthread_should_park(void);

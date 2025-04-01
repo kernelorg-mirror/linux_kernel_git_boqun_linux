@@ -77,6 +77,7 @@ enum KTHREAD_BITS {
 	KTHREAD_IS_PER_CPU = 0,
 	KTHREAD_SHOULD_STOP,
 	KTHREAD_SHOULD_PARK,
+	KTHREAD_SHOULD_RUN,
 };
 
 static inline struct kthread *to_kthread(struct task_struct *k)
@@ -458,7 +459,9 @@ static int kthread(void *_create)
 		kthread_affine_node();
 
 	ret = -EINTR;
-	if (!test_bit(KTHREAD_SHOULD_STOP, &self->flags)) {
+	/* If _RUN bit is set, run regardless */
+	if (test_bit(KTHREAD_SHOULD_RUN, &self->flags) ||
+	    !test_bit(KTHREAD_SHOULD_STOP, &self->flags)) {
 		cgroup_kthread_ready();
 		__kthread_parkme(self);
 		ret = threadfn(data);
@@ -796,6 +799,25 @@ int kthread_stop(struct task_struct *k)
 	return ret;
 }
 EXPORT_SYMBOL(kthread_stop);
+
+/**
+ * kthread_start - start a thread created by kthread_create().
+ * @k: thread created by kthread_create().
+ *
+ * Sets the KTHREAD_SHOULD_RUN bit for @k, and wakes it to run. If the kthread
+ * is already running (i.e. executing the threadfn()), this acts as a normal
+ * wake_up_process(). For newly created thread, this guarantees the threadfn()
+ * will be executed even if there is a racing kthread_stop().
+ */
+void kthread_start(struct task_struct *k)
+{
+	struct kthread *kthread;
+
+	kthread = to_kthread(k);
+	set_bit(KTHREAD_SHOULD_RUN, &kthread->flags);
+	wake_up_process(k);
+}
+EXPORT_SYMBOL(kthread_start);
 
 /**
  * kthread_stop_put - stop a thread and put its task struct
