@@ -21,7 +21,9 @@ pub mod ops;
 pub mod ordering;
 
 pub use generic::Atomic;
-pub use ordering::{Acquire, Full, Relaxed, Release};
+pub use ordering::{
+    Acquire, AcquireOrRelaxed, All, Full, Relaxed, RelaxedOnly, Release, ReleaseOrRelaxed,
+};
 
 // SAFETY: `u64` and `i64` has the same size and alignment.
 unsafe impl generic::AllowAtomic for u64 {
@@ -128,6 +130,79 @@ unsafe impl<T> generic::AllowAtomic for *mut T {
 
     fn from_repr(repr: Self::Repr) -> Self {
         repr as Self
+    }
+}
+
+/// An atomic true of false flag.
+pub struct AtomicFlag(Atomic<i32>);
+
+impl AtomicFlag {
+    /// Creates a new atomic flag.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use kernel::sync::atomic::AtomicFlag;
+    ///
+    /// // A static atomic variable.
+    /// static FLAG: AtomicFlag = AtomicFlag::new(false);
+    /// ```
+    #[inline(always)]
+    pub const fn new(flag: bool) -> Self {
+        // Use `as` here because `From::from()` is not a const function.
+        Self(Atomic::new(flag as i32))
+    }
+
+    /// Tests the flag value.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use kernel::sync::atomic::{AtomicFlag, Relaxed};
+    ///
+    /// let flag = AtomicFlag::new(false);
+    ///
+    /// assert_eq!(flag.test(Relaxed), false);
+    /// ```
+    #[inline(always)]
+    pub fn test<O: AcquireOrRelaxed>(&self, ordering: O) -> bool {
+        self.0.load(ordering) != 0
+    }
+
+    /// Sets the flag value.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use kernel::sync::atomic::{AtomicFlag, Relaxed};
+    ///
+    /// let flag = AtomicFlag::new(true);
+    ///
+    /// flag.set(false, Relaxed);
+    ///
+    /// assert_eq!(flag.test(Relaxed), false);
+    /// ```
+    #[inline(always)]
+    pub fn set<O: ReleaseOrRelaxed>(&self, flag: bool, ordering: O) {
+        self.0.store(i32::from(flag), ordering);
+    }
+
+    /// Exchange the flag value.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use kernel::sync::atomic::{AtomicFlag, Relaxed};
+    ///
+    /// let flag = AtomicFlag::new(true);
+    ///
+    /// assert_eq!(flag.xchg(false, Relaxed), true);
+    ///
+    /// assert_eq!(flag.test(Relaxed), false);
+    /// ```
+    #[inline(always)]
+    pub fn xchg<O: All>(&self, new: bool, ordering: O) -> bool {
+        self.0.xchg(i32::from(new), ordering) != 0
     }
 }
 
