@@ -16,7 +16,22 @@
 //!
 //! [`LKMM`]: srctree/tools/memory-model/
 
+pub mod generic;
 pub mod ops;
 pub mod ordering;
 
+#[doc(inline)]
+pub use generic::Atomic;
 pub use ordering::{Acquire, Full, Relaxed, Release};
+
+// SAFETY: `i32` has the same size and alignment with itself, and is round-trip transmutable to
+// itself.
+unsafe impl generic::AtomicType for i32 {
+    type Repr = i32;
+}
+
+// SAFETY: `i64` has the same size and alignment with itself, and is round-trip transmutable to
+// itself.
+unsafe impl generic::AtomicType for i64 {
+    type Repr = i64;
+}
