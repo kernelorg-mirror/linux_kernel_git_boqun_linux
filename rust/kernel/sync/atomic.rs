@@ -117,6 +117,12 @@ unsafe impl generic::AllowAtomicAdd<usize> for usize {
     }
 }
 
+// SAFETY: `*mut T` and `*mut ()` has the same size and alignment, and `*mut T` is round-trip
+// transmutable to `*mut ()`.
+unsafe impl<T> generic::AllowAtomic for *mut T {
+    type Repr = *mut crate::ffi::c_void;
+}
+
 use crate::macros::kunit_tests;
 
 #[kunit_tests(rust_atomics)]
@@ -141,6 +147,9 @@ mod tests {
 
             assert_eq!(v, x.load(Relaxed));
         });
+
+        let x = Atomic::new(core::ptr::null_mut::<i32>());
+        assert!(x.load(Relaxed).is_null());
     }
 
     #[test]
@@ -183,5 +192,34 @@ mod tests {
 
             assert_eq!(v + 25, x.load(Relaxed));
         });
+    }
+
+    #[test]
+    fn atomic_ptr_tests() -> crate::error::Result {
+        use crate::alloc::{flags::GFP_KERNEL, KBox};
+        use core::ptr;
+
+        let x = Atomic::new(ptr::null_mut::<i32>());
+
+        assert!(x.load(Relaxed).is_null());
+
+        let new = KBox::new(42, GFP_KERNEL)?;
+        x.store(ptr::from_mut(KBox::leak(new)), Release);
+
+        let ptr = x.load(Relaxed);
+        assert!(!ptr.is_null());
+
+        // SAFETY: `ptr` is a valid pointer from `KBox::leak()` and the address dependency
+        // guarantees observation of the initialization of `KBox`.
+        assert_eq!(42, unsafe { ptr.read_volatile() });
+
+        x.xchg(ptr::null_mut(), Relaxed);
+        assert!(x.load(Relaxed).is_null());
+
+        // SAFETY: `ptr` is a valid pointer from `KBox::leak()` and no one is currently referencing
+        // the pointer, so it's safety to convert the ownership back to a `KBox`.
+        drop(unsafe { KBox::from_raw(ptr) });
+
+        Ok(())
     }
 }
