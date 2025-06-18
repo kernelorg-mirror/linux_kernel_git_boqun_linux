@@ -89,6 +89,45 @@ unsafe impl generic::AllowAtomicArithmetic for isize {
     }
 }
 
+/// # Provenance preservation
+///
+/// `Atomic<*mut T>` preserves provenance, that is for any pointer stored into the atomic variable,
+/// a load that reads the stored value will also have the provenance of the pointer when stored.
+///
+/// The provenance preservation is achieved by:
+///
+/// - If the pointer is stored by a non-atomic operation and loaded by a non-atomic operation, it's
+///   trivial.
+///
+/// - If the pointer is stored by an atomic operation and loaded by an atomic operation,
+///   `into_repr()` + `from_repr()` guarantees that the provenance is preserved.
+///
+/// - If the pointer is stored by a non-atomic operation and loaded by an atomic operation, the
+///   load part is done via `asm!()` in a C function, so it can be treated as a normal pointer
+///   read.
+///
+/// - If the pointer is stored by an atomic operation and loaded by a non-atomic operation, the
+///   store part is done via `asm!()` in a C function, so it can be treated as a normal pointer
+///   write.
+///
+// SAFETY: A `*mut T` has the same size and the alignment as `i64` for 64bit and the same as `i32`
+// for 32bit, and it's safe to transmute and back. And it's safe to transfer the ownership of a
+// pointer value to another thread.
+unsafe impl<T> generic::AllowAtomic for *mut T {
+    #[cfg(CONFIG_64BIT)]
+    type Repr = i64;
+    #[cfg(not(CONFIG_64BIT))]
+    type Repr = i32;
+
+    fn into_repr(self) -> Self::Repr {
+        self as Self::Repr
+    }
+
+    unsafe fn from_repr(repr: Self::Repr) -> Self {
+        repr as Self
+    }
+}
+
 use crate::macros::kunit_tests;
 
 #[kunit_tests(rust_atomics)]
@@ -113,6 +152,9 @@ mod tests {
 
             assert_eq!(v, x.load(Relaxed));
         });
+
+        let x = Atomic::new(core::ptr::null_mut::<i32>());
+        assert!(x.load(Relaxed).is_null());
     }
 
     #[test]
@@ -155,5 +197,34 @@ mod tests {
 
             assert_eq!(v + 25, x.load(Relaxed));
         });
+    }
+
+    #[test]
+    fn atomic_ptr_tests() -> crate::error::Result {
+        use crate::alloc::{flags::GFP_KERNEL, KBox};
+        use core::ptr;
+
+        let x = Atomic::new(ptr::null_mut::<i32>());
+
+        assert!(x.load(Relaxed).is_null());
+
+        let new = KBox::new(42, GFP_KERNEL)?;
+        x.store(ptr::from_mut(KBox::leak(new)), Release);
+
+        let ptr = x.load(Relaxed);
+        assert!(!ptr.is_null());
+
+        // SAFETY: `ptr` is a valid pointer from `KBox::leak()` and the address dependency
+        // guarantees observation of the initialization of `KBox`.
+        assert_eq!(42, unsafe { ptr.read_volatile() });
+
+        x.xchg(ptr::null_mut(), Relaxed);
+        assert!(x.load(Relaxed).is_null());
+
+        // SAFETY: `ptr` is a valid pointer from `KBox::leak()` and no one is currently referencing
+        // the pointer, so it's safety to convert the ownership back to a `KBox`.
+        drop(unsafe { KBox::from_raw(ptr) });
+
+        Ok(())
     }
 }

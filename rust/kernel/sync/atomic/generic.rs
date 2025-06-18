@@ -44,6 +44,10 @@ use core::cell::UnsafeCell;
 #[repr(transparent)]
 pub struct Atomic<T: AllowAtomic>(UnsafeCell<T>);
 
+// SAFETY: `Atomic<T>` is safe to send between execution contexts, because `T` is `AllowAtomic` and
+// `AllowAtomic`'s safety requirement guarantees that.
+unsafe impl<T: AllowAtomic> Send for Atomic<T> {}
+
 // SAFETY: `Atomic<T>` is safe to share among execution contexts because all accesses are atomic.
 unsafe impl<T: AllowAtomic> Sync for Atomic<T> {}
 
@@ -60,9 +64,14 @@ unsafe impl<T: AllowAtomic> Sync for Atomic<T> {}
 ///     that a valid pointer to [`Self`] is a valid pointer to [`Self::Repr`].
 ///   - If a value of [`Self::Repr`] is a result a [`transmute()`] from a [`Self`], it must be safe
 ///     to [`transmute()`] the value back to a [`Self`].
+/// - The implementer must guarantee it's safe to transfer ownership from one execution context to
+///   another. Usually this means [`Self`] needs to be [`Send`], but there is a special case:
+///   because `*mut T` is not [`Send`] and is yet the basic type needs to support atomic
+///   operations, so this safety requirement is added to [`AllowAtomic`] trait. This safety
+///   requirement is automatically satisfied if the type is a [`Send`].
 ///
 /// [`transmute()`]: core::mem::transmute
-pub unsafe trait AllowAtomic: Sized + Send + Copy {
+pub unsafe trait AllowAtomic: Sized + Copy {
     /// The backing atomic implementation type.
     type Repr: AtomicImpl;
 
@@ -90,7 +99,7 @@ pub unsafe trait AllowAtomic: Sized + Send + Copy {
 // An `AtomicImpl` is automatically an `AllowAtomic`.
 //
 // SAFETY: `T::Repr` is `Self` (i.e. `T`), so they have the same size and alignment, and it's
-// round-trip transmutable to itself.
+// round-trip transmutable to itself. And all `AtomicImpl` types are `Send`.
 unsafe impl<T: AtomicImpl> AllowAtomic for T {
     type Repr = Self;
 }
