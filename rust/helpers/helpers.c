@@ -8,6 +8,7 @@
  */
 
 #include "atomic.c"
+#include "atomic_ptr.c"
 #include "auxiliary.c"
 #include "barrier.c"
 #include "blk.c"
