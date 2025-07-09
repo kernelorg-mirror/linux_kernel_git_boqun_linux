@@ -15,6 +15,7 @@ mod private {
 // `i32` and `i64` are only supported atomic implementations.
 impl private::Sealed for i32 {}
 impl private::Sealed for i64 {}
+impl private::Sealed for *mut crate::ffi::c_void {}
 
 /// A marker trait for types that implement atomic operations with C side primitives.
 ///
@@ -23,13 +24,16 @@ impl private::Sealed for i64 {}
 ///
 /// - `i32` maps to `atomic_t`.
 /// - `i64` maps to `atomic64_t`.
-pub trait AtomicImpl: Sized + Send + Copy + private::Sealed {}
+pub trait AtomicImpl: Sized + Copy + private::Sealed {}
 
 // `atomic_t` implements atomic operations on `i32`.
 impl AtomicImpl for i32 {}
 
 // `atomic64_t` implements atomic operations on `i64`.
 impl AtomicImpl for i64 {}
+
+// `atomic_ptr` implements atomic operations on `*mut crate::ffi::c_void`
+impl AtomicImpl for *mut crate::ffi::c_void {}
 
 // This macro generates the function signature with given argument list and return type.
 macro_rules! declare_atomic_method {
@@ -120,7 +124,7 @@ macro_rules! impl_atomic_method {
 
 // Delcares $ops trait with methods and implements the trait for `i32` and `i64`.
 macro_rules! declare_and_impl_atomic_methods {
-    ($ops:ident ($doc:literal) {
+    ($ops:ident ($doc:literal) [] {
         $(
             $func:ident [$($variant:ident),*]($($arg_sig:tt)*) $( -> $ret:ty)? {
                 call($($arg:tt)*)
@@ -135,31 +139,85 @@ macro_rules! declare_and_impl_atomic_methods {
                 );
             )*
         }
-
-        impl $ops for i32 {
+    };
+    (@impl $ops:ident ($doc:literal) [$impl:ty => $c_type:ident] {
+        $(
+            $func:ident [$($variant:ident),*]($($arg_sig:tt)*) $( -> $ret:ty)? {
+                call($($arg:tt)*)
+            }
+        )*
+    }) => {
+        impl $ops for $impl {
             $(
                 impl_atomic_method!(
-                    (atomic) $func[$($variant)*]($($arg_sig)*) $(-> $ret)? {
+                    ($c_type) $func[$($variant)*]($($arg_sig)*) $(-> $ret)? {
                         call($($arg)*)
                     }
                 );
             )*
         }
 
-        impl $ops for i64 {
-            $(
-                impl_atomic_method!(
-                    (atomic64) $func[$($variant)*]($($arg_sig)*) $(-> $ret)? {
+    };
+    ($ops:ident ($doc:literal) [$impl:ty => $c_type:ident, $($rest:tt)*] {
+        $(
+            $func:ident [$($variant:ident),*]($($arg_sig:tt)*) $( -> $ret:ty)? {
+                call($($arg:tt)*)
+            }
+        )*
+    }) => {
+        declare_and_impl_atomic_methods!(
+            @impl
+            $ops ($doc) [$impl => $c_type] {
+                $(
+                    $func [$($variant),*]($($arg_sig)*) $( -> $ret)? {
                         call($($arg)*)
                     }
-                );
-            )*
-        }
+                )*
+            }
+        );
+        declare_and_impl_atomic_methods!(
+            $ops ($doc) [$($rest)*] {
+                $(
+                    $func [$($variant),*]($($arg_sig)*) $( -> $ret)? {
+                        call($($arg)*)
+                    }
+                )*
+            }
+        );
+    };
+    ($ops:ident ($doc:literal) [$impl:ty => $c_type:ident] {
+        $(
+            $func:ident [$($variant:ident),*]($($arg_sig:tt)*) $( -> $ret:ty)? {
+                call($($arg:tt)*)
+            }
+        )*
+    }) => {
+        declare_and_impl_atomic_methods!(
+            @impl
+            $ops ($doc) [$impl => $c_type] {
+                $(
+                    $func [$($variant),*]($($arg_sig)*) $( -> $ret)? {
+                        call($($arg)*)
+                    }
+                )*
+            }
+        );
+        declare_and_impl_atomic_methods!(
+            $ops ($doc) [] {
+                $(
+                    $func [$($variant),*]($($arg_sig)*) $( -> $ret)? {
+                        call($($arg)*)
+                    }
+                )*
+            }
+        );
     }
 }
 
 declare_and_impl_atomic_methods!(
-    AtomicHasBasicOps ("Basic atomic operations") {
+    AtomicHasBasicOps ("Basic atomic operations")
+    [i32 => atomic, i64 => atomic64, *mut crate::ffi::c_void => atomic_ptr]
+    {
         read[acquire](ptr: *mut Self) -> Self {
             call(ptr.cast())
         }
@@ -171,7 +229,9 @@ declare_and_impl_atomic_methods!(
 );
 
 declare_and_impl_atomic_methods!(
-    AtomicHasXchgOps ("Exchange and compare-and-exchange atomic operations") {
+    AtomicHasXchgOps ("Exchange and compare-and-exchange atomic operations")
+    [i32 => atomic, i64 => atomic64, *mut crate::ffi::c_void => atomic_ptr]
+    {
         xchg[acquire, release, relaxed](ptr: *mut Self, v: Self) -> Self {
             call(ptr.cast(), v)
         }
@@ -183,7 +243,9 @@ declare_and_impl_atomic_methods!(
 );
 
 declare_and_impl_atomic_methods!(
-    AtomicHasArithmeticOps ("Atomic arithmetic operations") {
+    AtomicHasArithmeticOps ("Atomic arithmetic operations")
+    [i32 => atomic, i64 => atomic64]
+    {
         add[](ptr: *mut Self, v: Self) {
             call(v, ptr.cast())
         }
