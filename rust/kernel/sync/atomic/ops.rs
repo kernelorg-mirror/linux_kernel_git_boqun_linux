@@ -15,6 +15,7 @@ mod private {
 // `i32` and `i64` are only supported atomic implementations.
 impl private::Sealed for i32 {}
 impl private::Sealed for i64 {}
+impl private::Sealed for *mut crate::ffi::c_void {}
 
 /// A marker trait for types that implement atomic operations with C side primitives.
 ///
@@ -23,7 +24,7 @@ impl private::Sealed for i64 {}
 ///
 /// - `i32` maps to `atomic_t`.
 /// - `i64` maps to `atomic64_t`.
-pub trait AtomicImpl: Sized + Send + Copy + private::Sealed {
+pub trait AtomicImpl: Sized + Copy + private::Sealed {
     /// The type of the delta in arithmetic or logical operations.
     ///
     /// For example, in `atomic_add(ptr, v)`, it's the type of `v`. Usually it's the same type of
@@ -39,6 +40,10 @@ impl AtomicImpl for i32 {
 // `atomic64_t` implements atomic operations on `i64`.
 impl AtomicImpl for i64 {
     type Delta = Self;
+}
+
+impl AtomicImpl for *mut crate::ffi::c_void {
+    type Delta = isize;
 }
 
 /// Atomic representation.
@@ -151,7 +156,7 @@ macro_rules! impl_atomic_method {
 
 // Delcares $ops trait with methods and implements the trait for `i32` and `i64`.
 macro_rules! declare_and_impl_atomic_methods {
-    ($(#[$attr:meta])* pub trait $ops:ident {
+    ($(#[$attr:meta])* pub trait $ops:ident [$($rest:tt)*] {
         $(
             $(#[doc=$doc:expr])*
             fn $func:ident [$($variant:ident),*]($($arg_sig:tt)*) $( -> $ret:ty)? {
@@ -169,31 +174,58 @@ macro_rules! declare_and_impl_atomic_methods {
             )*
         }
 
-        impl $ops for i32 {
+        declare_and_impl_atomic_methods!(@impl
+            pub trait $ops [$($rest)*] {
+                $(
+                    fn $func [$($variant),*]($($arg_sig)*) $( -> $ret)? {
+                        $unsafe { bindings::#call($($arg)*) }
+                    }
+                )*
+            }
+        );
+    };
+    (@impl pub trait $ops:ident [] {
+        $(
+            fn $func:ident [$($variant:ident),*]($($arg_sig:tt)*) $( -> $ret:ty)? {
+                $unsafe:tt { bindings::#call($($arg:tt)*) }
+            }
+        )*
+    }) => {
+    };
+    (@impl pub trait $ops:ident [$impl:ty => $c_type:ident $(, $rest_impl:ty => $rest_c_type:ident)*] {
+        $(
+            fn $func:ident [$($variant:ident),*]($($arg_sig:tt)*) $( -> $ret:ty)? {
+                $unsafe:tt { bindings::#call($($arg:tt)*) }
+            }
+        )*
+    }) => {
+        impl $ops for $impl {
             $(
                 impl_atomic_method!(
-                    (atomic) $func[$($variant)*]($($arg_sig)*) $(-> $ret)? {
+                    ($c_type) $func[$($variant)*]($($arg_sig)*) $(-> $ret)? {
                         $unsafe { call($($arg)*) }
                     }
                 );
             )*
         }
 
-        impl $ops for i64 {
+        declare_and_impl_atomic_methods!(@impl
+            pub trait $ops [$($rest_impl => $rest_c_type),*] {
             $(
-                impl_atomic_method!(
-                    (atomic64) $func[$($variant)*]($($arg_sig)*) $(-> $ret)? {
-                        $unsafe { call($($arg)*) }
-                    }
-                );
+                fn $func [$($variant),*]($($arg_sig)*) $( -> $ret)? {
+                    $unsafe { bindings::#call($($arg)*) }
+                }
             )*
-        }
+            }
+        );
     }
 }
 
 declare_and_impl_atomic_methods!(
     /// Basic atomic operations
-    pub trait AtomicBasicOps {
+    pub trait AtomicBasicOps
+    [i32 => atomic, i64 => atomic64, *mut crate::ffi::c_void => atomic_ptr]
+    {
         /// Atomic read (load).
         fn read[acquire](a: &AtomicRepr<Self>) -> Self {
             // SAFETY: `a.as_ptr()` is valid and properly aligned.
@@ -210,7 +242,9 @@ declare_and_impl_atomic_methods!(
 
 declare_and_impl_atomic_methods!(
     /// Exchange and compare-and-exchange atomic operations
-    pub trait AtomicExchangeOps {
+    pub trait AtomicExchangeOps
+    [i32 => atomic, i64 => atomic64, *mut crate::ffi::c_void => atomic_ptr]
+    {
         /// Atomic exchange.
         ///
         /// Atomically updates `*a` to `v` and returns the old value.
@@ -237,7 +271,9 @@ declare_and_impl_atomic_methods!(
 
 declare_and_impl_atomic_methods!(
     /// Atomic arithmetic operations
-    pub trait AtomicArithmeticOps {
+    pub trait AtomicArithmeticOps
+    [i32 => atomic, i64 => atomic64]
+    {
         /// Atomic add (wrapping).
         ///
         /// Atomically updates `*a` to `(*a).wrapping_add(v)`.
