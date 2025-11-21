@@ -51,6 +51,7 @@ static void __mutex_init_generic(struct mutex *lock)
 #ifdef CONFIG_MUTEX_SPIN_ON_OWNER
 	osq_lock_init(&lock->osq);
 #endif
+	debug_mutex_init(lock);
 }
 
 static inline struct task_struct *__owner_task(unsigned long owner)
@@ -173,7 +174,12 @@ static __always_inline bool __mutex_unlock_fast(struct mutex *lock)
 void mutex_init_lockep(struct mutex *lock, const char *name, struct lock_class_key *key)
 {
 	__mutex_init_generic(lock);
-	debug_mutex_init(lock, name, key);
+
+	/*
+	 * Make sure we are not reinitializing a held lock:
+	 */
+	debug_check_no_locks_freed((void *)lock, sizeof(*lock));
+	lockdep_init_map_wait(&lock->dep_map, name, key, 0, LD_WAIT_SLEEP);
 }
 EXPORT_SYMBOL(mutex_init_lockep);
 #endif /* !CONFIG_DEBUG_LOCK_ALLOC */
