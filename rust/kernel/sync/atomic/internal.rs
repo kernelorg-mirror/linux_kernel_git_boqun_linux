@@ -283,7 +283,7 @@ declare_and_impl_atomic_methods!(
 // used for now, leaving the existing macros untouched until the overall
 // design requirements are settled.
 declare_and_impl_atomic_methods!(
-    [ i32 => atomic, i64 => atomic64 ]
+    [ i8 => atomic_i8, i16 => atomic_i16, i32 => atomic, i64 => atomic64 ]
     /// Exchange and compare-and-exchange atomic operations
     pub trait AtomicExchangeOps {
         /// Atomic exchange.
