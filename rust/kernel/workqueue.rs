@@ -578,55 +578,6 @@ pub unsafe trait HasWork<T, const ID: u64 = 0> {
     unsafe fn work_container_of(ptr: *mut Work<T, ID>) -> *mut Self;
 }
 
-/// Used to safely implement the [`HasWork<T, ID>`] trait.
-///
-/// # Examples
-///
-/// ```
-/// use kernel::sync::Arc;
-/// use kernel::workqueue::{self, impl_has_work, Work};
-///
-/// struct MyStruct<'a, T, const N: usize> {
-///     work_field: Work<MyStruct<'a, T, N>, 17>,
-///     f: fn(&'a [T; N]),
-/// }
-///
-/// impl_has_work! {
-///     impl{'a, T, const N: usize} HasWork<MyStruct<'a, T, N>, 17>
-///     for MyStruct<'a, T, N> { self.work_field }
-/// }
-/// ```
-#[macro_export]
-macro_rules! impl_has_work {
-    ($(impl$({$($generics:tt)*})?
-       HasWork<$work_type:ty $(, $id:tt)?>
-       for $self:ty
-       { self.$field:ident }
-    )*) => {$(
-        // SAFETY: The implementation of `raw_get_work` only compiles if the field has the right
-        // type.
-        unsafe impl$(<$($generics)+>)? $crate::workqueue::HasWork<$work_type $(, $id)?> for $self {
-            #[inline]
-            unsafe fn raw_get_work(ptr: *mut Self) -> *mut $crate::workqueue::Work<$work_type $(, $id)?> {
-                // SAFETY: The caller promises that the pointer is not dangling.
-                unsafe {
-                    ::core::ptr::addr_of_mut!((*ptr).$field)
-                }
-            }
-
-            #[inline]
-            unsafe fn work_container_of(
-                ptr: *mut $crate::workqueue::Work<$work_type $(, $id)?>,
-            ) -> *mut Self {
-                // SAFETY: The caller promises that the pointer points at a field of the right type
-                // in the right kind of struct.
-                unsafe { $crate::container_of!(ptr, Self, $field) }
-            }
-        }
-    )*};
-}
-pub use impl_has_work;
-
 impl<T, const ID: u64> Field<T> for Work<T, ID> {}
 
 /// SAFETY: Per the safety requirement of `HasField`, `raw_get_field()` and `field_container_of()`
@@ -746,8 +697,8 @@ pub unsafe trait HasDelayedWork<T, const ID: u64 = 0>: HasWork<T, ID> {}
 
 /// Used to safely implement the [`HasDelayedWork<T, ID>`] trait.
 ///
-/// This macro also implements the [`HasWork`] trait, so you do not need to use [`impl_has_work!`]
-/// when using this macro.
+/// This macro also implements the [`HasWork`] trait, so you do not need to use `#[has_field]` when
+/// using this macro.
 ///
 /// # Examples
 ///
