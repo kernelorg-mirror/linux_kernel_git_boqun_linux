@@ -423,6 +423,7 @@ impl ProcessNodeRefs {
 /// Strictly speaking, there can be multiple of these per process. There is one for each binder fd
 /// that a process has opened, so processes using several binder contexts have several `Process`
 /// objects. This ensures that the contexts are fully separated.
+#[derive(HasField)]
 #[pin_data]
 pub(crate) struct Process {
     pub(crate) ctx: Arc<Context>,
@@ -451,6 +452,7 @@ pub(crate) struct Process {
 
     // Work node for deferred work item.
     #[pin]
+    #[field]
     defer_work: Work<Process>,
 
     // Links for process list in Context.
@@ -458,10 +460,6 @@ pub(crate) struct Process {
     links: ListLinks,
 
     pub(crate) stats: BinderStats,
-}
-
-kernel::impl_has_work! {
-    impl HasWork<Process> for Process { self.defer_work }
 }
 
 kernel::list::impl_list_arc_safe! {
