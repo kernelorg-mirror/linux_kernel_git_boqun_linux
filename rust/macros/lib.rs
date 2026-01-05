@@ -13,6 +13,7 @@
 
 mod concat_idents;
 mod export;
+mod field;
 mod fmt;
 mod helpers;
 mod kunit;
@@ -483,6 +484,16 @@ pub fn paste(input: TokenStream) -> TokenStream {
 #[proc_macro_attribute]
 pub fn kunit_tests(attr: TokenStream, input: TokenStream) -> TokenStream {
     kunit::kunit_tests(parse_macro_input!(attr), parse_macro_input!(input))
+        .unwrap_or_else(|e| e.into_compile_error())
+        .into()
+}
+
+/// Derives the implementation for `HasField`.
+///
+/// See the documentation of `HasField` for more information.
+#[proc_macro_derive(HasField, attributes(field))]
+pub fn has_field(input: TokenStream) -> TokenStream {
+    field::has_field(parse_macro_input!(input))
         .unwrap_or_else(|e| e.into_compile_error())
         .into()
 }

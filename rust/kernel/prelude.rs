@@ -25,9 +25,11 @@ pub use ::ffi::{
 pub use crate::alloc::{flags::*, Box, KBox, KVBox, KVVec, KVec, VBox, VVec, Vec};
 
 #[doc(no_inline)]
-pub use macros::{export, fmt, kunit_tests, module, vtable};
+pub use macros::{export, fmt, kunit_tests, module, vtable, HasField};
 
 pub use pin_init::{init, pin_data, pin_init, pinned_drop, InPlaceWrite, Init, PinInit, Zeroable};
+
+pub use super::field::{Field, HasField};
 
 pub use super::{build_assert, build_error};
 
