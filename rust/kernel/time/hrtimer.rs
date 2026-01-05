@@ -98,6 +98,8 @@ unsafe impl<T> Send for HrTimer<T> {}
 // on a timer from multiple threads.
 unsafe impl<T> Sync for HrTimer<T> {}
 
+impl<T> Field<T> for HrTimer<T> {}
+
 impl<T> HrTimer<T> {
     /// Return an initializer for a new timer instance.
     pub fn new() -> impl PinInit<Self>
@@ -417,17 +419,7 @@ pub unsafe trait HrTimerHandle {
 }
 
 /// Implemented by structs that contain timer nodes.
-///
-/// Clients of the timer API would usually safely implement this trait by using
-/// the [`crate::impl_has_hr_timer`] macro.
-///
-/// # Safety
-///
-/// Implementers of this trait must ensure that the implementer has a
-/// [`HrTimer`] field and that all trait methods are implemented according to
-/// their documentation. All the methods of this trait must operate on the same
-/// field.
-pub unsafe trait HasHrTimer<T> {
+pub trait HasHrTimer<T>: HasField<T, HrTimer<T>> {
     /// The operational mode associated with this timer.
     ///
     /// This defines how the expiration value is interpreted.
@@ -441,7 +433,11 @@ pub unsafe trait HasHrTimer<T> {
     /// # Safety
     ///
     /// `this` must be a valid pointer.
-    unsafe fn raw_get_timer(this: *const Self) -> *const HrTimer<T>;
+    #[inline]
+    unsafe fn raw_get_timer(this: *const Self) -> *const HrTimer<T> {
+        // SAFETY: Per function safety requirement, `this` is a valid pointer.
+        unsafe { <Self as HasField<_, _>>::raw_get_field(this.cast_mut()) }.cast_const()
+    }
 
     /// Return a pointer to the struct that is containing the [`HrTimer`] pointed
     /// to by `ptr`.
@@ -452,9 +448,15 @@ pub unsafe trait HasHrTimer<T> {
     /// # Safety
     ///
     /// `ptr` must point to a [`HrTimer<T>`] field in a struct of type `Self`.
+    #[inline]
     unsafe fn timer_container_of(ptr: *mut HrTimer<T>) -> *mut Self
     where
-        Self: Sized;
+        Self: Sized,
+    {
+        // SAFETY: Per function safety requirement, `ptr` is a valid pointer and points to a
+        // `HrTimer` field in a struct.
+        unsafe { <Self as HasField<_, _>>::field_container_of(ptr) }
+    }
 
     /// Get pointer to the contained `bindings::hrtimer` struct.
     ///
@@ -728,48 +730,6 @@ impl<'a, T: HasHrTimer<T>> HrTimerCallbackContext<'a, T> {
     /// current time of the base clock for the [`HrTimer`].
     pub fn forward_now(&mut self, duration: Delta) -> u64 {
         self.forward(HrTimerInstant::<T>::now(), duration)
-    }
-}
-
-/// Use to implement the [`HasHrTimer<T>`] trait.
-///
-/// See [`module`] documentation for an example.
-///
-/// [`module`]: crate::time::hrtimer
-#[macro_export]
-macro_rules! impl_has_hr_timer {
-    (
-        impl$({$($generics:tt)*})?
-            HasHrTimer<$timer_type:ty>
-            for $self:ty
-        {
-            mode : $mode:ty,
-            field : self.$field:ident $(,)?
-        }
-        $($rest:tt)*
-    ) => {
-        // SAFETY: This implementation of `raw_get_timer` only compiles if the
-        // field has the right type.
-        unsafe impl$(<$($generics)*>)? $crate::time::hrtimer::HasHrTimer<$timer_type> for $self {
-            type TimerMode = $mode;
-
-            #[inline]
-            unsafe fn raw_get_timer(
-                this: *const Self,
-            ) -> *const $crate::time::hrtimer::HrTimer<$timer_type> {
-                // SAFETY: The caller promises that the pointer is not dangling.
-                unsafe { ::core::ptr::addr_of!((*this).$field) }
-            }
-
-            #[inline]
-            unsafe fn timer_container_of(
-                ptr: *mut $crate::time::hrtimer::HrTimer<$timer_type>,
-            ) -> *mut Self {
-                // SAFETY: As per the safety requirement of this function, `ptr`
-                // is pointing inside a `$timer_type`.
-                unsafe { ::kernel::container_of!(ptr, $timer_type, $field) }
-            }
-        }
     }
 }
 
