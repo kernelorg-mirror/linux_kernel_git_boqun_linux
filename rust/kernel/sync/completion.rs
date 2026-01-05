@@ -17,18 +17,16 @@ use crate::{bindings, prelude::*, types::Opaque};
 ///
 /// ```
 /// use kernel::sync::{Arc, Completion};
-/// use kernel::workqueue::{self, impl_has_work, new_work, Work, WorkItem};
+/// use kernel::workqueue::{self, new_work, Work, WorkItem};
 ///
+/// #[derive(HasField)]
 /// #[pin_data]
 /// struct MyTask {
 ///     #[pin]
+///     #[field]
 ///     work: Work<MyTask>,
 ///     #[pin]
 ///     done: Completion,
-/// }
-///
-/// impl_has_work! {
-///     impl HasWork<Self> for MyTask { self.work }
 /// }
 ///
 /// impl MyTask {
