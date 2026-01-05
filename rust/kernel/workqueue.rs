@@ -34,17 +34,15 @@
 //!
 //! ```
 //! use kernel::sync::Arc;
-//! use kernel::workqueue::{self, impl_has_work, new_work, Work, WorkItem};
+//! use kernel::workqueue::{self, new_work, Work, WorkItem};
 //!
+//! #[derive(HasField)]
 //! #[pin_data]
 //! struct MyStruct {
 //!     value: i32,
 //!     #[pin]
+//!     #[field]
 //!     work: Work<MyStruct>,
-//! }
-//!
-//! impl_has_work! {
-//!     impl HasWork<Self> for MyStruct { self.work }
 //! }
 //!
 //! impl MyStruct {
@@ -76,21 +74,19 @@
 //!
 //! ```
 //! use kernel::sync::Arc;
-//! use kernel::workqueue::{self, impl_has_work, new_work, Work, WorkItem};
+//! use kernel::workqueue::{self, new_work, Work, WorkItem};
 //!
+//! #[derive(HasField)]
 //! #[pin_data]
 //! struct MyStruct {
 //!     value_1: i32,
 //!     value_2: i32,
 //!     #[pin]
+//!     #[field]
 //!     work_1: Work<MyStruct, 1>,
 //!     #[pin]
+//!     #[field]
 //!     work_2: Work<MyStruct, 2>,
-//! }
-//!
-//! impl_has_work! {
-//!     impl HasWork<Self, 1> for MyStruct { self.work_1 }
-//!     impl HasWork<Self, 2> for MyStruct { self.work_2 }
 //! }
 //!
 //! impl MyStruct {
@@ -188,6 +184,11 @@
 use crate::{
     alloc::{AllocError, Flags},
     container_of,
+    field::{
+        Field,
+        HasField, //
+    },
+    macros::HasField,
     prelude::*,
     sync::Arc,
     sync::LockClassKey,
@@ -349,9 +350,11 @@ impl Queue {
 /// A helper type used in [`try_spawn`].
 ///
 /// [`try_spawn`]: Queue::try_spawn
+#[derive(HasField)]
 #[pin_data]
 struct ClosureWork<T> {
     #[pin]
+    #[field]
     work: Work<ClosureWork<T>>,
     func: Option<T>,
 }
@@ -534,18 +537,16 @@ impl<T: ?Sized, const ID: u64> Work<T, ID> {
 
 /// Declares that a type contains a [`Work<T, ID>`].
 ///
-/// The intended way of using this trait is via the [`impl_has_work!`] macro. You can use the macro
+/// The intended way of using this trait is via the `#[derive(HasField)]` macro. You can use the macro
 /// like this:
 ///
 /// ```no_run
-/// use kernel::workqueue::{impl_has_work, Work};
+/// use kernel::workqueue::Work;
 ///
+/// #[derive(HasField)]
 /// struct MyWorkItem {
+///     #[field]
 ///     work_field: Work<MyWorkItem, 1>,
-/// }
-///
-/// impl_has_work! {
-///     impl HasWork<MyWorkItem, 1> for MyWorkItem { self.work_field }
 /// }
 /// ```
 ///
@@ -559,7 +560,6 @@ impl<T: ?Sized, const ID: u64> Work<T, ID> {
 /// - `work_container_of(raw_get_work(ptr)) == ptr` for any `ptr: *mut Self`.
 /// - `raw_get_work(work_container_of(ptr)) == ptr` for any `ptr: *mut Work<T, ID>`.
 ///
-/// [`impl_has_work!`]: crate::impl_has_work
 /// [`raw_get_work`]: HasWork::raw_get_work
 /// [`work_container_of`]: HasWork::work_container_of
 pub unsafe trait HasWork<T, const ID: u64 = 0> {
@@ -627,8 +627,24 @@ macro_rules! impl_has_work {
 }
 pub use impl_has_work;
 
-impl_has_work! {
-    impl{T} HasWork<Self> for ClosureWork<T> { self.work }
+impl<T, const ID: u64> Field<T> for Work<T, ID> {}
+
+/// SAFETY: Per the safety requirement of `HasField`, `raw_get_field()` and `field_container_of()`
+/// return valid pointers and are true inverses of each other, hence the implementation below
+/// fulfills `HasWork`'s safety requirement as well.
+unsafe impl<T: HasField<T, Work<T, ID>>, const ID: u64> HasWork<T, ID> for T {
+    #[inline]
+    unsafe fn raw_get_work(ptr: *mut Self) -> *mut Work<T, ID> {
+        // SAFETY: Per the function safety requirement, `ptr` is a valid pointer.
+        unsafe { <T as HasField<T, Work<T, ID>>>::raw_get_field(ptr) }
+    }
+
+    #[inline]
+    unsafe fn work_container_of(ptr: *mut Work<T, ID>) -> *mut Self {
+        // SAFETY: Per the function safety requirement, `ptr` is a valid pointer, and it points to
+        // a work field in struct `T`.
+        unsafe { <T as HasField<T, Work<T, ID>>>::field_container_of(ptr) }
+    }
 }
 
 /// Links for a delayed work item.
