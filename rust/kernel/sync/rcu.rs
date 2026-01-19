@@ -308,3 +308,39 @@ unsafe impl<T: DropRcu> ForeignOwnable for RcuDrop<T> {
         unsafe { T::borrow_mut(ptr) }
     }
 }
+
+/// `RcuDrop<T>` impl `Clone` if `T: Clone`.
+///
+/// # Examples
+///
+/// ```
+/// use kernel::sync::{Arc, rcu::{DropRcu, RcuDrop, RcuHead, read_lock, WithRcuHead}};
+/// use core::ops::Deref;
+///
+/// let rcu_drop = RcuDrop::new(Arc::new(WithRcuHead::<i32>::new(42), GFP_KERNEL)?);
+/// let cloned = rcu_drop.clone();
+///
+/// let g = read_lock();
+/// let w = cloned.with_rcu(&g).deref();
+///
+/// drop(cloned);
+/// drop(rcu_drop); // <- kfree_rcu()
+///
+/// assert_eq!(*w, 42);
+///
+/// # Ok::<(), Error>(())
+/// ```
+impl<T: DropRcu + Clone> Clone for RcuDrop<T> {
+    fn clone(&self) -> Self {
+        let ptr = self.0;
+
+        // SAFETY: Normally it's unsafe but here we keep it in a `ManuallyDrop` as if the
+        // `from_foreign()` has not been called.
+        let temp = ManuallyDrop::new(unsafe { <T as ForeignOwnable>::from_foreign(ptr) });
+
+        let new = temp.deref().clone();
+
+        // INVARIANTS: Trivial.
+        Self(new.into_foreign(), PhantomData)
+    }
+}
