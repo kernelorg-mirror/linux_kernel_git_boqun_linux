@@ -527,6 +527,16 @@ impl<T: HasField<T, RcuHead> + Send + Sync + 'static> DropRcu for Arc<T> {
             unsafe { KBox::from_raw(ptr) }.drop_rcu();
         }
     }
+
+    type RcuBorrowed<'a> = &'a T;
+
+    unsafe fn rcu_borrow<'a>(ptr: *mut c_void) -> Self::RcuBorrowed<'a> {
+        // CAST: `ptr` should points the `ArcInner<T>` per implementation of `ForeignOwnable`.
+        let ptr = ptr.cast::<ArcInner<T>>();
+
+        // SAFETY: RCU guarantees the returned reference is valid for one grace period.
+        unsafe { &(*ptr).data }
+    }
 }
 
 impl<T: ?Sized> From<UniqueArc<T>> for Arc<T> {

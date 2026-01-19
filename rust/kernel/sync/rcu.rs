@@ -140,6 +140,16 @@ pub trait DropRcu: ForeignOwnable + Send {
         // SAFETY: `self.into_foreign()` is used immediately.
         unsafe { Self::drop_rcu_ptr(self.into_foreign()) };
     }
+
+    /// TODO
+    type RcuBorrowed<'a>;
+
+    /// TODO
+    ///
+    /// # Safety
+    ///
+    /// TODO
+    unsafe fn rcu_borrow<'a>(ptr: *mut c_void) -> Self::RcuBorrowed<'a>;
 }
 
 /// Drop and free the object in a rcu callback.
@@ -200,6 +210,13 @@ impl<T: HasField<T, RcuHead> + Send + 'static, A: Allocator> DropRcu for Box<T, 
             }
         }
     }
+
+    type RcuBorrowed<'a> = &'a T;
+
+    unsafe fn rcu_borrow<'a>(ptr: *mut c_void) -> Self::RcuBorrowed<'a> {
+        // SAFETY: TODO
+        unsafe { <Self as ForeignOwnable>::borrow(ptr) }
+    }
 }
 
 /// A wrapper that uses the `drop_rcu()` instead of normal `drop()` of `T`.
@@ -247,12 +264,10 @@ impl<T: DropRcu> RcuDrop<T> {
     }
 
     /// Accesses the value while RCU read lock is held.
-    pub fn with_rcu<'rcu>(&self, _guard: &'rcu Guard) -> <T as ForeignOwnable>::Borrowed<'rcu> {
+    pub fn with_rcu<'rcu>(&self, _guard: &'rcu Guard) -> <T as DropRcu>::RcuBorrowed<'rcu> {
         // SAFETY: The function signature guarantees that the object outlives the returned
         // reference since the `RcuDrop::drop()` waits for a grace period.
-        //
-        // TODO: Use rcu_borrow?
-        unsafe { T::borrow(self.0) }
+        unsafe { T::rcu_borrow(self.0) }
     }
 }
 
@@ -283,5 +298,41 @@ unsafe impl<T: DropRcu> ForeignOwnable for RcuDrop<T> {
         // SAFETY: Per function safety requirement, `ptr` is `self.0` and per type invariants, it's
         // safe to call `T::borrow_mut()`.
         unsafe { T::borrow_mut(ptr) }
+    }
+}
+
+/// `RcuDrop<T>` impl `Clone` if `T: Clone`.
+///
+/// # Examples
+///
+/// ```
+/// use kernel::sync::{Arc, rcu::{DropRcu, RcuDrop, RcuHead, read_lock, WithRcuHead}};
+/// use core::ops::Deref;
+///
+/// let rcu_drop = RcuDrop::new(Arc::new(WithRcuHead::<i32>::new(42), GFP_KERNEL)?);
+/// let cloned = rcu_drop.clone();
+///
+/// let g = read_lock();
+/// let w = cloned.with_rcu(&g).deref();
+///
+/// drop(cloned);
+/// drop(rcu_drop); // <- kfree_rcu()
+///
+/// assert_eq!(*w, 42);
+///
+/// # Ok::<(), Error>(())
+/// ```
+impl<T: DropRcu + Clone> Clone for RcuDrop<T> {
+    fn clone(&self) -> Self {
+        let ptr = self.0;
+
+        // SAFETY: Normally it's unsafe but here we keep it in a `ManuallyDrop` as if the
+        // `from_foreign()` has not been called.
+        let temp = ManuallyDrop::new(unsafe { <T as ForeignOwnable>::from_foreign(ptr) });
+
+        let new = temp.deref().clone();
+
+        // INVARIANTS: Trivial.
+        Self(new.into_foreign(), PhantomData)
     }
 }
