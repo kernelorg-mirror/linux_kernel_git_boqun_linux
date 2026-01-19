@@ -18,9 +18,12 @@
 
 use crate::{
     alloc::{AllocError, Flags, KBox},
+    container_of,
     ffi::c_void,
+    field::HasField,
     fmt,
     init::InPlaceInit,
+    sync::rcu::{DropRcu, RcuHead},
     sync::Refcount,
     try_init,
     types::ForeignOwnable,
@@ -471,6 +474,57 @@ impl<T: ?Sized> Drop for Arc<T> {
             //
             // SAFETY: The pointer was initialised from the result of `KBox::leak`.
             unsafe { drop(KBox::from_raw(self.ptr.as_ptr())) };
+        }
+    }
+}
+
+// SAFETY: `ArcInner<T>` contains a `T` and `T` contains a `RcuHead`.
+unsafe impl<T> HasField<ArcInner<T>, RcuHead> for ArcInner<T>
+where
+    T: HasField<T, RcuHead>,
+{
+    unsafe fn field_container_of(ptr: *mut RcuHead) -> *mut Self {
+        // SAFETY: Per function safety requirement, `ptr` points to the `rcu_head` in `T` in an
+        // `ArcInner<T>`.
+        let obj = unsafe { T::field_container_of(ptr) };
+
+        // SAFETY: `obj` points to the `data` field of a `ArcInner<T>`.
+        unsafe { container_of!(obj, ArcInner<T>, data) }
+    }
+
+    unsafe fn raw_get_field(ptr: *mut Self) -> *mut RcuHead {
+        // SAFETY: Per function safety requirement, `ptr` is valid pointer of `ArcInner<T>`.
+        let obj = unsafe { &raw mut (*ptr).data };
+
+        // SAFETY: `obj` is a valid `T`.
+        unsafe { T::raw_get_field(obj) }
+    }
+}
+
+/// [`Arc<T>`] supports RCU async drop if `T` has [`RcuHead`] in it.
+///
+/// # Examples
+/// ```
+/// use kernel::sync::{Arc, rcu::{DropRcu, RcuHead, WithRcuHead}};
+///
+/// let arc = Arc::new(WithRcuHead::<i32>::new(42), GFP_KERNEL)?;
+///
+/// arc.drop_rcu(); // <- use kfree_rcu().
+///
+/// # Ok::<(), Error>(())
+/// ```
+impl<T: HasField<T, RcuHead> + Send + Sync + 'static> DropRcu for Arc<T> {
+    unsafe fn drop_rcu_ptr(ptr: *mut ffi::c_void) {
+        // CAST: `ptr` should points the `ArcInner<T>` per implementation of `ForeignOwnable`.
+        let ptr = ptr.cast::<ArcInner<T>>();
+
+        // INVARIANT: If the refcount reaches zero, there are no other instances of `Arc`, and
+        // this instance is being dropped, so the broken invariant is not observable.
+        // SAFETY: By the type invariant, there is necessarily a reference to the object.
+        let is_zero = unsafe { &*ptr }.refcount.dec_and_test();
+        if is_zero {
+            // SAFETY: The pointer was initialised from the result of `KBox::leak`.
+            unsafe { KBox::from_raw(ptr) }.drop_rcu();
         }
     }
 }
