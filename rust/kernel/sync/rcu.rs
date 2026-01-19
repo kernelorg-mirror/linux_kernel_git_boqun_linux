@@ -5,13 +5,18 @@
 //! C header: [`include/linux/rcupdate.h`](srctree/include/linux/rcupdate.h)
 
 use crate::{
+    alloc::{Allocator, Box},
     bindings,
     field::{Field, HasField},
     macros::HasField,
-    types::{NotThreadSafe, Opaque},
+    types::{ForeignOwnable, NotThreadSafe, Opaque},
 };
 
+use core::marker::PhantomData;
+use core::mem::ManuallyDrop;
 use core::ops::Deref;
+
+use ffi::c_void;
 
 /// Evidence that the RCU read side lock is held on the current thread/CPU.
 ///
@@ -115,5 +120,191 @@ impl<T> Deref for WithRcuHead<T> {
 
     fn deref(&self) -> &Self::Target {
         &self.data
+    }
+}
+
+/// An allocation that supports dropping after one grace period.
+///
+/// [`Send`] is needed because RCU callback can execute on a different execution context.
+pub trait DropRcu: ForeignOwnable + Send {
+    /// Drops a foreign-owned object via a pointer after a grace period.
+    ///
+    /// # Safety
+    ///
+    /// `ptr` must be a return of a `into_foreign()`, and no corresponding `from_foreign()` has
+    /// been called.
+    unsafe fn drop_rcu_ptr(ptr: *mut c_void);
+
+    /// Drops an object after a grace period.
+    fn drop_rcu(self) {
+        // SAFETY: `self.into_foreign()` is used immediately.
+        unsafe { Self::drop_rcu_ptr(self.into_foreign()) };
+    }
+
+    /// Type used to immutably borrow a value for one RCU grace period that is currently
+    /// foreign-owned.
+    type RcuBorrowed<'a>;
+
+    /// Borrows a foreign-owned object immutably for an RCU grace period.
+    ///
+    /// This method provides a way to access a foreign-owned RCU-safe value immutably.
+    ///
+    /// # Safety
+    ///
+    /// * The provided pointer must have been returned by a previous call to [`into_foreign`].
+    /// * If [`from_foreign`] is called, then `'a` must not end after the call to `from_foreign`
+    ///   plus one rcu grace period.
+    ///
+    /// [`into_foreign`]: ForeignOwnable::into_foreign
+    /// [`from_foreign`]: ForeignOwnable::from_foreign
+    unsafe fn rcu_borrow<'a>(ptr: *mut c_void) -> Self::RcuBorrowed<'a>;
+}
+
+/// Drop and free the object in a rcu callback.
+///
+/// # Safety
+///
+/// `head` references the [`RcuHead`] field of a `T` that has no references to it. Ownership of the
+/// [`Box<T, A>`] must be passed.
+unsafe extern "C" fn box_drop_rcu_fn<T: HasField<T, RcuHead>, A: Allocator>(
+    head: *mut bindings::callback_head,
+) {
+    // CAST: `RcuHead` is transparent to `callback_head`.
+    let head = head.cast::<RcuHead>();
+
+    // SAFETY: Per the function safety requirement, `head` points to the `RcuHead` field in a
+    // `Box<T, A>`.
+    let box_ptr = unsafe { T::field_container_of(head) };
+
+    // SAFETY: Caller ensures exclusive access and passed ownership.
+    drop(unsafe { Box::<T, A>::from_raw(box_ptr) });
+}
+
+/// [`Box<T, A>`] supports RCU async drop if `T` has [`RcuHead`] in it.
+///
+/// # Examples
+/// ```
+/// use kernel::sync::rcu::{DropRcu, RcuHead, WithRcuHead};
+///
+/// let kbox = KBox::new(WithRcuHead::<i32>::new(42), GFP_KERNEL)?;
+///
+/// kbox.drop_rcu(); // <- use kfree_rcu().
+///
+/// # Ok::<(), Error>(())
+/// ```
+impl<T: HasField<T, RcuHead> + Send + 'static, A: Allocator> DropRcu for Box<T, A> {
+    #[inline]
+    unsafe fn drop_rcu_ptr(ptr: *mut c_void) {
+        // CAST: `Box::into_foreign()` returns the pointer value that points to `T`.
+        let ptr = ptr.cast();
+
+        // SAFETY: `ptr` is a valid pointer to `T` per function safety requirement.
+        let head = unsafe { T::raw_get_field(ptr) };
+
+        // CAST: `RcuHead` is transparent to `callback_head`.
+        let head = head.cast();
+
+        if core::mem::needs_drop::<T>() {
+            // SAFETY: `head` is the `rcu_head` field of `T`. All users will be gone in an RCU
+            // grace period. This is the destructor, so we may pass ownership of the allocation.
+            unsafe {
+                bindings::call_rcu(head, Some(box_drop_rcu_fn::<T, A>));
+            }
+        } else {
+            // TODO: Maybe make it an Allocator API?
+            // SAFETY: All users will be gone in an rcu grace period.
+            unsafe {
+                bindings::kvfree_call_rcu(head, ptr.cast());
+            }
+        }
+    }
+
+    type RcuBorrowed<'a> = &'a T;
+
+    unsafe fn rcu_borrow<'a>(ptr: *mut c_void) -> Self::RcuBorrowed<'a> {
+        // SAFETY: TODO
+        unsafe { <Self as ForeignOwnable>::borrow(ptr) }
+    }
+}
+
+/// A wrapper that uses the `drop_rcu()` instead of normal `drop()` of `T`.
+///
+/// # Examples
+///
+/// ```
+/// use kernel::sync::rcu::{DropRcu, RcuDrop, RcuHead, read_lock, WithRcuHead};
+/// use core::ops::Deref;
+///
+/// let rcu_drop = RcuDrop::new(KBox::new(WithRcuHead::<i32>::new(42), GFP_KERNEL)?);
+///
+/// let g = read_lock();
+/// let w = rcu_drop.with_rcu(&g).deref();
+///
+/// drop(rcu_drop); // <- kfree_rcu()
+///
+/// assert_eq!(*w, 42);
+///
+/// # Ok::<(), Error>(())
+/// ```
+///
+/// # Invariants
+///
+/// `self.0` is a return from `T::into_foreign()`.
+pub struct RcuDrop<T: DropRcu>(*mut c_void, PhantomData<T>);
+
+// SAFETY: `DropRcu` indicates `Send` hence it's safe to transfer `RcuDrop` to a different
+// execution context.
+unsafe impl<T: DropRcu> Send for RcuDrop<T> {}
+
+impl<T: DropRcu> Drop for RcuDrop<T> {
+    fn drop(&mut self) {
+        // SAFETY: `self.0` is a return of `T::into_foreign()`.
+        unsafe {
+            T::drop_rcu_ptr(self.0);
+        }
+    }
+}
+
+impl<T: DropRcu> RcuDrop<T> {
+    /// Creates a new [`RcuDrop`] wrapper.
+    pub fn new(t: T) -> Self {
+        Self(t.into_foreign(), PhantomData)
+    }
+
+    /// Accesses the value while RCU read lock is held.
+    pub fn with_rcu<'rcu>(&self, _guard: &'rcu Guard) -> <T as DropRcu>::RcuBorrowed<'rcu> {
+        // SAFETY: The function signature guarantees that the object outlives the returned
+        // reference since the `RcuDrop::drop()` waits for a grace period.
+        unsafe { T::rcu_borrow(self.0) }
+    }
+}
+
+// SAFETY: Per type invariants `self.0` is the return of `T::into_foreign()`, and it's guaranteed
+// to be aligned to `T::FOREIGN_ALIGN` and not null.
+unsafe impl<T: DropRcu> ForeignOwnable for RcuDrop<T> {
+    const FOREIGN_ALIGN: usize = <T as ForeignOwnable>::FOREIGN_ALIGN;
+
+    type Borrowed<'a> = <T as ForeignOwnable>::Borrowed<'a>;
+    type BorrowedMut<'a> = <T as ForeignOwnable>::BorrowedMut<'a>;
+
+    fn into_foreign(self) -> *mut c_void {
+        ManuallyDrop::new(self).0
+    }
+
+    unsafe fn from_foreign(ptr: *mut c_void) -> Self {
+        // INVARIANTS: `ptr` is a return of `T::into_foreign()`.
+        Self(ptr, PhantomData)
+    }
+
+    unsafe fn borrow<'a>(ptr: *mut c_void) -> Self::Borrowed<'a> {
+        // SAFETY: Per function safety requirement, `ptr` is `self.0` and per type invariants, it's
+        // safe to call `T::borrow()`.
+        unsafe { T::borrow(ptr) }
+    }
+
+    unsafe fn borrow_mut<'a>(ptr: *mut c_void) -> Self::BorrowedMut<'a> {
+        // SAFETY: Per function safety requirement, `ptr` is `self.0` and per type invariants, it's
+        // safe to call `T::borrow_mut()`.
+        unsafe { T::borrow_mut(ptr) }
     }
 }
