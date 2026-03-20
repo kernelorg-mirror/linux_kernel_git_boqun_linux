@@ -46,6 +46,7 @@ struct rcu_tasks_percpu {
 	unsigned int urgent_gp;
 	struct work_struct rtp_work;
 	struct irq_work rtp_irq_work;
+	struct irq_work timer_irq_work;
 	struct rcu_head barrier_q_head;
 	struct list_head rtp_blkd_tasks;
 	struct list_head rtp_exit_list;
@@ -134,6 +135,7 @@ static void call_rcu_tasks_iw_wakeup(struct irq_work *iwp);
 static DEFINE_PER_CPU(struct rcu_tasks_percpu, rt_name ## __percpu) = {			\
 	.lock = __RAW_SPIN_LOCK_UNLOCKED(rt_name ## __percpu.cbs_pcpu_lock),		\
 	.rtp_irq_work = IRQ_WORK_INIT_HARD(call_rcu_tasks_iw_wakeup),			\
+	.timer_irq_work = IRQ_WORK_INIT(call_rcu_tasks_mod_timer_lazy),			\
 };											\
 static struct rcu_tasks rt_name =							\
 {											\
@@ -321,11 +323,19 @@ static void call_rcu_tasks_generic_timer(struct timer_list *tlp)
 		if (!rtpcp->urgent_gp)
 			rtpcp->urgent_gp = 1;
 		needwake = true;
-		mod_timer(&rtpcp->lazy_timer, rcu_tasks_lazy_time(rtp));
+		/*
+		 * We cannot mod_timer() here because "timer base lock ->
+		 * rcu_node lock" lock dependencies can be establish by having
+		 * a BPF instrument at timer_start(), and that means deadlock
+		 * if we mod_timer() here. So delay the mod_timer() when we are
+		 * out of the lock critical section.
+		 */
 	}
 	raw_spin_unlock_irqrestore_rcu_node(rtpcp, flags);
-	if (needwake)
+	if (needwake) {
+		mod_timer(&rtpcp->lazy_timer, rcu_tasks_lazy_time(rtp));
 		rcuwait_wake_up(&rtp->cbs_wait);
+	}
 }
 
 // IRQ-work handler that does deferred wakeup for call_rcu_tasks_generic().
@@ -336,6 +346,16 @@ static void call_rcu_tasks_iw_wakeup(struct irq_work *iwp)
 
 	rtp = rtpcp->rtpp;
 	rcuwait_wake_up(&rtp->cbs_wait);
+}
+
+static void call_rcu_tasks_mod_timer_lazy(struct irq_work *iwp)
+{
+	struct rcu_tasks *rtp;
+	struct rcu_tasks_percpu *rtpcp = container_of(iwp, struct rcu_tasks_percpu, timer_irq_work);
+	rtp = rtpcp->rtpp;
+
+	if (!timer_pending(&rtpcp->lazy_timer))
+		mod_timer(&rtpcp->lazy_timer, rcu_tasks_lazy_time(rtp));
 }
 
 // Enqueue a callback for the specified flavor of Tasks RCU.
@@ -377,7 +397,7 @@ static void call_rcu_tasks_generic(struct rcu_head *rhp, rcu_callback_t func,
 		   (rcu_segcblist_n_cbs(&rtpcp->cblist) == rcu_task_lazy_lim);
 	if (havekthread && !needwake && !timer_pending(&rtpcp->lazy_timer)) {
 		if (rtp->lazy_jiffies)
-			mod_timer(&rtpcp->lazy_timer, rcu_tasks_lazy_time(rtp));
+			irq_work_queue(&rtpcp->timer_irq_work);
 		else
 			needwake = rcu_segcblist_empty(&rtpcp->cblist);
 	}
