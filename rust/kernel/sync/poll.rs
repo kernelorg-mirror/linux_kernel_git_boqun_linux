@@ -9,12 +9,19 @@ use crate::{
     fs::File,
     prelude::*,
     sync::{
-        rcu::synchronize_rcu,
+        rcu::{
+            synchronize_rcu, //
+            RcuFreeSafe,
+        },
         CondVar,
         LockClassKey, //
     }, //
 };
-use core::{marker::PhantomData, ops::Deref};
+
+use core::{
+    marker::PhantomData,
+    ops::Deref, //
+};
 
 /// Creates a [`PollCondVar`] initialiser with the given name and a newly-created lock class.
 #[macro_export]
@@ -70,6 +77,7 @@ impl<'a> PollTable<'a> {
 ///
 /// [`CondVar`]: crate::sync::CondVar
 #[pin_data(PinnedDrop)]
+#[repr(transparent)]
 pub struct PollCondVar {
     #[pin]
     inner: CondVar,
@@ -97,12 +105,20 @@ impl Deref for PollCondVar {
 impl PinnedDrop for PollCondVar {
     #[inline]
     fn drop(self: Pin<&mut Self>) {
+        self.drop_before_gp();
+
+        // Wait for epoll items to be properly removed.
+        synchronize_rcu();
+    }
+}
+
+// SAFETY: __wake_up_pollfree() guarantees all the epoll items on the wait list will be gone after
+// one grace period.
+unsafe impl RcuFreeSafe for PollCondVar {
+    fn drop_before_gp(self: Pin<&mut Self>) {
         // Clear anything registered using `register_wait`.
         //
         // SAFETY: The pointer points at a valid `wait_queue_head`.
         unsafe { bindings::__wake_up_pollfree(self.inner.wait_queue_head.get()) };
-
-        // Wait for epoll items to be properly removed.
-        synchronize_rcu();
     }
 }
