@@ -566,7 +566,8 @@ static ssize_t smu_v14_0_0_get_gpu_metrics(struct smu_context *smu,
 	gpu_metrics->temperature_skin = metrics.SkinTemp;
 
 	gpu_metrics->average_gfx_activity = metrics.GfxActivity;
-	gpu_metrics->average_vcn_activity = metrics.VcnActivity;
+	/* metrics.VcnActivity is permyriad, convert it to percentage. */
+	gpu_metrics->average_vcn_activity = metrics.VcnActivity / 100;
 	memcpy(&gpu_metrics->average_ipu_activity[0],
 		&metrics.IpuBusy[0],
 		sizeof(uint16_t) * 8);
