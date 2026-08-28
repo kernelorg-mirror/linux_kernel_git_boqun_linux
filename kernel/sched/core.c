@@ -5343,7 +5343,7 @@ static struct rq *finish_task_switch(struct task_struct *prev)
 	 *
 	 * Also, see FORK_PREEMPT_COUNT.
 	 */
-	if (WARN_ONCE(preempt_count() != 2*PREEMPT_DISABLE_OFFSET,
+	if (WARN_ONCE(preempt_count() != SCHED_PREEMPT_COUNT,
 		      "corrupted preempt_count: %s/%d/0x%x\n",
 		      current->comm, current->pid, preempt_count()))
 		preempt_count_set(FORK_PREEMPT_COUNT);

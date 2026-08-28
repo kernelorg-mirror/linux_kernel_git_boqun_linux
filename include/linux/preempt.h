@@ -92,6 +92,8 @@
  */
 #define INIT_PREEMPT_COUNT	PREEMPT_OFFSET
 
+#define SCHED_PREEMPT_COUNT	(2 * PREEMPT_DISABLE_OFFSET)
+
 /*
  * Initial preempt_count value; reflects the preempt_count schedule invariant
  * which states that during context switches:
@@ -101,7 +103,7 @@
  * Note: PREEMPT_DISABLE_OFFSET is 0 for !PREEMPT_COUNT kernels.
  * Note: See finish_task_switch().
  */
-#define FORK_PREEMPT_COUNT	(2*PREEMPT_DISABLE_OFFSET + PREEMPT_ENABLED)
+#define FORK_PREEMPT_COUNT	(SCHED_PREEMPT_COUNT + PREEMPT_ENABLED)
 
 /* preempt_count() and related functions, depends on PREEMPT_NEED_RESCHED */
 #include <asm/preempt.h>
