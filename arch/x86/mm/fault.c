@@ -1486,7 +1486,8 @@ handle_page_fault(struct pt_regs *regs, unsigned long error_code,
 	 * page fault handling might have reenabled interrupts,
 	 * make sure to disable them again.
 	 */
-	local_irq_disable();
+	if (!irqs_disabled())
+		local_irq_disable();
 }
 
 DEFINE_IDTENTRY_RAW_ERRORCODE(exc_page_fault)
