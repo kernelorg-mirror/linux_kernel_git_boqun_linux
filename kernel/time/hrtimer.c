@@ -2068,7 +2068,7 @@ static void __run_hrtimer(struct hrtimer_cpu_base *cpu_base, struct hrtimer_cloc
 
 	lockdep_hrtimer_exit(expires_in_hardirq);
 	trace_hrtimer_expire_exit(timer);
-	raw_spin_lock_irq(&cpu_base->lock);
+	raw_spin_lock_irqsave(&cpu_base->lock, flags);
 
 	/*
 	 * Note: We clear the running state after enqueue_hrtimer and
