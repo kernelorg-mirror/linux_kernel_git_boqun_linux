@@ -170,6 +170,11 @@ static __always_inline void raw_local_irq_disable(void)
 	arch_local_irq_disable();
 }
 
+static __always_inline void raw_force_local_irq_disable(void)
+{
+	arch_local_irq_disable();
+}
+
 static __always_inline void raw_local_irq_enable(void)
 {
 	arch_local_irq_enable();
