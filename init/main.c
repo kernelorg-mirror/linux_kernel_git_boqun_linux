@@ -987,7 +987,6 @@ void start_kernel(void)
 
 	cgroup_init_early();
 
-	local_irq_disable();
 	early_boot_irqs_disabled = true;
 
 	/*
