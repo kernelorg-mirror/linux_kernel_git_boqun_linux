@@ -665,19 +665,17 @@ static void __flush_smp_call_function_queue(bool warn_cpu_offline)
 void flush_smp_call_function_queue(void)
 {
 	unsigned int was_pending;
-	unsigned long flags;
 
 	if (llist_empty(this_cpu_ptr(&call_single_queue)))
 		return;
 
-	local_irq_save(flags);
+	lockdep_assert_irqs_disabled();
+
 	/* Get the already pending soft interrupts for RT enabled kernels */
 	was_pending = local_softirq_pending();
 	__flush_smp_call_function_queue(true);
 	if (local_softirq_pending())
 		do_softirq_post_smp_call_flush(was_pending);
-
-	local_irq_restore(flags);
 }
 
 static int __smp_call_function_single(int cpu, smp_call_func_t func,
