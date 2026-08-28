@@ -61,9 +61,19 @@ static __always_inline void preempt_count_set(unsigned long pc)
  */
 #define init_task_preempt_count(p) do { } while (0)
 
-#define init_idle_preempt_count(p, cpu) do { \
-	per_cpu(__preempt_count, (cpu)) = PREEMPT_DISABLED; \
+#ifdef CONFIG_PREEMPT_COUNT_IRQFLAGS
+
+#define init_idle_preempt_count(p, cpu) do {						\
+	per_cpu(__preempt_count, (cpu)) = PREEMPT_DISABLED | HARDIRQ_DISABLE_OFFSET;	\
 } while (0)
+
+#else
+
+#define init_idle_preempt_count(p, cpu) do {						\
+	per_cpu(__preempt_count, (cpu)) = PREEMPT_DISABLED;				\
+} while (0)
+
+#endif
 
 /*
  * We fold the NEED_RESCHED bit into the preempt count such that
