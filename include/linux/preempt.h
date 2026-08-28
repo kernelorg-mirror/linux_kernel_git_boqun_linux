@@ -172,6 +172,12 @@ static __always_inline unsigned char interrupt_context_level(void)
 #define hardirq_disable_exit()	__preempt_count_sub_return(HARDIRQ_DISABLE_OFFSET)
 
 /*
+ * Check whether a fault happened in an atomic context. Depending on
+ * CONFIG_PREEMPT_COUNT and CONFIG_PREEMPTION this check might be useless.
+ */
+#define fault_in_atomic()	in_atomic()
+
+/*
  * The preempt_count offset after preempt_disable();
  */
 #if defined(CONFIG_PREEMPT_COUNT)
