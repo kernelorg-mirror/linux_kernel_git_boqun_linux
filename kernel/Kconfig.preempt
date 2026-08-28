@@ -152,6 +152,15 @@ config PREEMPT_DYNAMIC
 	  Interesting if you want the same pre-built kernel should be used for
 	  both Server and Desktop workloads.
 
+config ARCH_SUPPORTS_PREEMPT_COUNT_IRQFLAGS
+	bool
+
+config PREEMPT_COUNT_IRQFLAGS
+	bool "Enable reference counted interrupt disable/enable mechanisms"
+	depends on ARCH_SUPPORTS_PREEMPT_COUNT_IRQFLAGS
+	help
+	  FIXME: Add some useful blurb
+
 config SCHED_CORE
 	bool "Core Scheduling for SMT"
 	depends on SCHED_SMT
