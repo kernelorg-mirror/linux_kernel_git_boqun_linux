@@ -90,17 +90,26 @@
  *
  * Reset by start_kernel()->sched_init()->init_idle()->init_idle_preempt_count().
  */
-#define INIT_PREEMPT_COUNT	PREEMPT_OFFSET
 
+#ifdef CONFIG_PREEMPT_COUNT_IRQFLAGS
+
+#define INIT_PREEMPT_COUNT	(PREEMPT_OFFSET + HARDIRQ_DISABLE_OFFSET)
+#define SCHED_PREEMPT_COUNT	(2 * PREEMPT_DISABLE_OFFSET + HARDIRQ_DISABLE_OFFSET)
+
+#else
+
+#define INIT_PREEMPT_COUNT	PREEMPT_OFFSET
 #define SCHED_PREEMPT_COUNT	(2 * PREEMPT_DISABLE_OFFSET)
+
+#endif
 
 /*
  * Initial preempt_count value; reflects the preempt_count schedule invariant
  * which states that during context switches:
  *
- *    preempt_count() == 2*PREEMPT_DISABLE_OFFSET
+ *    preempt_count() == SCHED_PREEMPT_COUNT
  *
- * Note: PREEMPT_DISABLE_OFFSET is 0 for !PREEMPT_COUNT kernels.
+ * Note: SCHED_PREEMPT_COUNT is 0 for !PREEMPT_COUNT kernels.
  * Note: See finish_task_switch().
  */
 #define FORK_PREEMPT_COUNT	(SCHED_PREEMPT_COUNT + PREEMPT_ENABLED)
@@ -177,7 +186,11 @@ static __always_inline unsigned char interrupt_context_level(void)
  * Check whether a fault happened in an atomic context. Depending on
  * CONFIG_PREEMPT_COUNT and CONFIG_PREEMPTION this check might be useless.
  */
-#define fault_in_atomic()	in_atomic()
+#ifdef CONFIG_PREEMPT_COUNT_IRQFLAGS
+# define fault_in_atomic()	(preempt_count() != HARDIRQ_DISABLE_OFFSET)
+#else
+# define fault_in_atomic()	in_atomic()
+#endif
 
 /*
  * The preempt_count offset after preempt_disable();
@@ -332,6 +345,21 @@ do { \
 #define preemptible()				0
 
 #endif /* CONFIG_PREEMPT_COUNT */
+
+#ifdef CONFIG_PREEMPT_COUNT_IRQFLAGS
+static __always_inline void __preempt_count_inc_hardirqs_disable(void)
+{
+	__preempt_count_add(HARDIRQ_DISABLE_OFFSET);
+}
+
+static __always_inline void __preempt_count_dec_hardirqs_disable(void)
+{
+	__preempt_count_sub(HARDIRQ_DISABLE_OFFSET);
+}
+#else
+static __always_inline void __preempt_count_inc_hardirqs_disable(void) { }
+static __always_inline void __preempt_count_dec_hardirqs_disable(void) { }
+#endif
 
 #ifdef MODULE
 /*
