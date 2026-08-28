@@ -163,33 +163,69 @@ extern void warn_bogus_irq_restore(void);
 #endif
 
 /*
- * Wrap the arch provided IRQ routines to provide appropriate checks.
+ * Wrap the architecture specific routines to provide appropriate checks.
  */
-#define raw_local_irq_disable()		arch_local_irq_disable()
-#define raw_local_irq_enable()		arch_local_irq_enable()
+static __always_inline void raw_local_irq_disable(void)
+{
+	arch_local_irq_disable();
+}
+
+static __always_inline void raw_local_irq_enable(void)
+{
+	arch_local_irq_enable();
+}
+
+static __always_inline unsigned long __raw_local_irq_save(void)
+{
+	return arch_local_irq_save();
+}
+
+static __always_inline void __raw_local_irq_restore(unsigned long flags)
+{
+	arch_local_irq_restore(flags);
+}
+
+static __always_inline unsigned long __raw_local_save_flags(void)
+{
+	return arch_local_save_flags();
+}
+
+static __always_inline bool __raw_irqs_disabled_flags(unsigned long flags)
+{
+	return arch_irqs_disabled_flags(flags);
+}
+
+static __always_inline bool raw_irqs_disabled(void)
+{
+	return arch_irqs_disabled();
+}
+
+static __always_inline void raw_safe_halt(void)
+{
+	arch_safe_halt();
+}
+
 #define raw_local_irq_save(flags)			\
 	do {						\
 		typecheck(unsigned long, flags);	\
-		flags = arch_local_irq_save();		\
+		flags = __raw_local_irq_save();		\
 	} while (0)
 #define raw_local_irq_restore(flags)			\
 	do {						\
 		typecheck(unsigned long, flags);	\
 		raw_check_bogus_irq_restore();		\
-		arch_local_irq_restore(flags);		\
+		__raw_local_irq_restore(flags);		\
 	} while (0)
 #define raw_local_save_flags(flags)			\
 	do {						\
 		typecheck(unsigned long, flags);	\
-		flags = arch_local_save_flags();	\
+		flags = __raw_local_save_flags();	\
 	} while (0)
 #define raw_irqs_disabled_flags(flags)			\
 	({						\
 		typecheck(unsigned long, flags);	\
-		arch_irqs_disabled_flags(flags);	\
+		__raw_irqs_disabled_flags(flags);	\
 	})
-#define raw_irqs_disabled()		(arch_irqs_disabled())
-#define raw_safe_halt()			arch_safe_halt()
 
 /*
  * The local_irq_*() APIs are equal to the raw_local_irq*()
