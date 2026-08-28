@@ -1095,7 +1095,7 @@ static int acpi_power_off(struct sys_off_data *data)
 {
 	/* acpi_sleep_prepare(ACPI_STATE_S5) should have already been called */
 	pr_debug("%s called\n", __func__);
-	local_irq_disable();
+	raw_force_local_irq_disable();
 	acpi_enter_sleep_state(ACPI_STATE_S5);
 	return NOTIFY_DONE;
 }
