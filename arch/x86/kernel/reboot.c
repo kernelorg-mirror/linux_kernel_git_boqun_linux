@@ -98,7 +98,7 @@ static int __init set_efi_reboot(const struct dmi_system_id *d)
 
 void __noreturn machine_real_restart(unsigned int type)
 {
-	local_irq_disable();
+	raw_force_local_irq_disable();
 
 	/*
 	 * Write zero to CMOS register number 0x0f, which the BIOS POST
@@ -535,7 +535,7 @@ static inline void nmi_shootdown_cpus_on_restart(void);
 #if IS_ENABLED(CONFIG_KVM_X86)
 static void emergency_reboot_disable_virtualization(void)
 {
-	local_irq_disable();
+	raw_force_local_irq_disable();
 
 	/*
 	 * Disable virtualization on all CPUs before rebooting to avoid hanging
@@ -699,7 +699,7 @@ void native_machine_shutdown(void)
 	 * not receive the per-cpu timer interrupt which may trigger
 	 * scheduler's load balance.
 	 */
-	local_irq_disable();
+	raw_force_local_irq_disable();
 	stop_other_cpus();
 #endif
 
@@ -823,7 +823,8 @@ static int crash_nmi_callback(unsigned int val, struct pt_regs *regs)
 	 */
 	if (cpu == crashing_cpu)
 		return NMI_HANDLED;
-	local_irq_disable();
+
+	raw_force_local_irq_disable();
 
 	if (shootdown_callback)
 		shootdown_callback(cpu, regs);
@@ -865,7 +866,7 @@ void nmi_shootdown_cpus(nmi_shootdown_cb callback)
 {
 	unsigned long msecs;
 
-	local_irq_disable();
+	raw_force_local_irq_disable();
 
 	/*
 	 * Avoid certain doom if a shootdown already occurred; re-registering

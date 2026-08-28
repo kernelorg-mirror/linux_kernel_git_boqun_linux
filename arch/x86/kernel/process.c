@@ -824,7 +824,7 @@ void __noreturn stop_this_cpu(void *dummy)
 	struct cpuinfo_x86 *c = this_cpu_ptr(&cpu_info);
 	unsigned int cpu = smp_processor_id();
 
-	local_irq_disable();
+	raw_force_local_irq_disable();
 
 	/*
 	 * Remove this CPU from the online mask and disable it
