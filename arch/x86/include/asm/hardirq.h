@@ -113,4 +113,6 @@ static __always_inline bool kvm_get_cpu_l1tf_flush_l1d(void)
 static __always_inline void kvm_set_cpu_l1tf_flush_l1d(void) { }
 #endif /* IS_ENABLED(CONFIG_KVM_INTEL) */
 
+#define __ARCH_IRQ_EXIT_IRQS_DISABLED 1
+
 #endif /* _ASM_X86_HARDIRQ_H */
