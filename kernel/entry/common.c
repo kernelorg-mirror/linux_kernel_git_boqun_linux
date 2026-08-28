@@ -171,6 +171,7 @@ irqentry_state_t noinstr irqentry_nmi_enter(struct pt_regs *regs)
 {
 	irqentry_state_t irq_state;
 
+	__preempt_count_inc_hardirqs_disable();
 	irq_state.lockdep = lockdep_hardirqs_enabled();
 
 	__nmi_enter();
@@ -202,4 +203,5 @@ void noinstr irqentry_nmi_exit(struct pt_regs *regs, irqentry_state_t irq_state)
 	if (irq_state.lockdep)
 		lockdep_hardirqs_on(CALLER_ADDR0);
 	__nmi_exit();
+	__preempt_count_dec_hardirqs_disable();
 }

@@ -97,6 +97,7 @@ static __always_inline bool arch_in_rcu_eqs(void) { return false; }
  */
 static __always_inline void enter_from_user_mode(struct pt_regs *regs)
 {
+	__preempt_count_inc_hardirqs_disable();
 	arch_enter_from_user_mode(regs);
 	lockdep_hardirqs_off(CALLER_ADDR0);
 
@@ -275,6 +276,7 @@ static __always_inline void exit_to_user_mode(void)
 	user_enter_irqoff();
 	arch_exit_to_user_mode();
 	lockdep_hardirqs_on(CALLER_ADDR0);
+	__preempt_count_dec_hardirqs_disable();
 }
 
 /**
@@ -384,6 +386,8 @@ static __always_inline irqentry_state_t irqentry_enter_from_kernel_mode(struct p
 	irqentry_state_t ret = {
 		.exit_rcu = false,
 	};
+
+	__preempt_count_inc_hardirqs_disable();
 
 	/*
 	 * If this entry hit the idle task invoke ct_irq_enter() whether
@@ -498,6 +502,7 @@ irqentry_exit_to_kernel_mode_after_preempt(struct pt_regs *regs, irqentry_state_
 			instrumentation_end();
 			ct_irq_exit();
 			lockdep_hardirqs_on(CALLER_ADDR0);
+			__preempt_count_dec_hardirqs_disable();
 			return;
 		}
 
@@ -514,6 +519,7 @@ irqentry_exit_to_kernel_mode_after_preempt(struct pt_regs *regs, irqentry_state_
 		if (state.exit_rcu)
 			ct_irq_exit();
 	}
+	__preempt_count_dec_hardirqs_disable();
 }
 
 /**
