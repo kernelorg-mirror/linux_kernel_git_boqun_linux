@@ -256,9 +256,9 @@ noinstr u32 kvm_read_and_reset_apf_flags(void)
 {
 	u32 flags = 0;
 
-	if (__this_cpu_read(async_pf_enabled)) {
-		flags = __this_cpu_read(apf_reason.flags);
-		__this_cpu_write(apf_reason.flags, 0);
+	if (raw_cpu_read(async_pf_enabled)) {
+		flags = raw_cpu_read(apf_reason.flags);
+		raw_cpu_write(apf_reason.flags, 0);
 	}
 
 	return flags;
