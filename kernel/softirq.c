@@ -470,7 +470,10 @@ void __local_bh_enable_ip(unsigned long ip, unsigned int cnt)
 		 * Run softirq if any pending. And do it in its own stack
 		 * as we may be calling this deep in a task call stack already.
 		 */
-		do_softirq();
+		if (IS_ENABLED(CONFIG_TRACE_IRQFLAGS))
+			do_softirq_irqsoff();
+		else
+			do_softirq();
 	}
 
 	preempt_count_dec();
@@ -532,20 +535,21 @@ static inline void invoke_softirq(void)
 
 asmlinkage __visible void do_softirq(void)
 {
-	__u32 pending;
-	unsigned long flags;
-
 	if (in_interrupt())
 		return;
 
-	local_irq_save(flags);
-
-	pending = local_softirq_pending();
-
-	if (pending)
+	guard(irqsave)();
+	if (local_softirq_pending())
 		do_softirq_own_stack();
+}
 
-	local_irq_restore(flags);
+void do_softirq_irqsoff(void)
+{
+	if (in_interrupt())
+		return;
+
+	if (local_softirq_pending())
+		do_softirq_own_stack();
 }
 
 #endif /* !CONFIG_PREEMPT_RT */
