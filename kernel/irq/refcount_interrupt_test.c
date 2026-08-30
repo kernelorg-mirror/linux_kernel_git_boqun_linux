@@ -4,7 +4,7 @@
  */
 
 #include <kunit/test.h>
-#include <linux/interrupt_rc.h>
+#include <linux/irqflags.h>
 
 #define TEST_IRQ_ON() KUNIT_EXPECT_FALSE(test, irqs_disabled())
 #define TEST_IRQ_OFF() KUNIT_EXPECT_TRUE(test, irqs_disabled())

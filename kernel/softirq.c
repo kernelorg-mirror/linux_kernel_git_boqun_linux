@@ -9,7 +9,6 @@
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
-#define INSTANTIATE_EXPORTED_INTERRUPT_DISABLE
 #include <linux/export.h>
 #include <linux/kernel_stat.h>
 #include <linux/interrupt.h>
@@ -88,20 +87,6 @@ DEFINE_PER_CPU(int, hardirq_context);
 EXPORT_PER_CPU_SYMBOL_GPL(hardirqs_enabled);
 EXPORT_PER_CPU_SYMBOL_GPL(hardirq_context);
 #endif
-
-DEFINE_PER_CPU(unsigned long, local_interrupt_disable_state);
-
-void _local_interrupt_save_state(unsigned long flags)
-{
-	__local_interrupt_save_state(flags);
-}
-EXPORT_SYMBOL(_local_interrupt_save_state);
-
-void _local_interrupt_enable(void)
-{
-	__local_interrupt_enable();
-}
-EXPORT_SYMBOL(_local_interrupt_enable);
 
 #ifndef CONFIG_HAS_SEPARATE_PREEMPT_RESCHED_BITS
 /*

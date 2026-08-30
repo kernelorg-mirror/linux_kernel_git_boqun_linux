@@ -215,6 +215,15 @@ static __always_inline void __raw_local_irq_restore(unsigned long cnt)
 		arch_local_irq_enable();
 }
 
+/* Same as raw_local_irq_restore() but don't need user to pass a count. */
+static __always_inline void raw_local_irq_resume(void)
+{
+	debug_assert((preempt_count() & HARDIRQ_DISABLE_MASK));
+
+	if (!(__preempt_count_sub_return(HARDIRQ_DISABLE_OFFSET) & HARDIRQ_DISABLE_MASK))
+		arch_local_irq_enable();
+}
+
 static __always_inline unsigned long __raw_local_save_flags(void)
 {
 	return preempt_count() & HARDIRQ_DISABLE_MASK;
@@ -262,6 +271,15 @@ static __always_inline unsigned long __raw_local_irq_save(void)
 static __always_inline void __raw_local_irq_restore(unsigned long flags)
 {
 	arch_local_irq_restore(flags);
+}
+
+static __always_inline void raw_local_irq_resume(void)
+{
+	/*
+	 * local_irq_resume() is not supported when
+	 * CONFIG_PREEMPT_COUNT_IRQFLAGS = n
+	 */
+	BUG();
 }
 
 static __always_inline unsigned long __raw_local_save_flags(void)
@@ -342,6 +360,14 @@ static __always_inline void raw_safe_halt(void)
 		raw_local_irq_restore(flags);		\
 	} while (0)
 
+#define local_irq_resume()						\
+	do {								\
+		if ((preempt_count() & HARDIRQ_DISABLE_MASK) ==		\
+				HARDIRQ_DISABLE_OFFSET)			\
+			trace_hardirqs_on();				\
+		raw_local_irq_resume();					\
+	} while (0)
+
 #define safe_halt()				\
 	do {					\
 		trace_hardirqs_on();		\
@@ -355,9 +381,22 @@ static __always_inline void raw_safe_halt(void)
 #define local_irq_disable()	do { raw_local_irq_disable(); } while (0)
 #define local_irq_save(flags)	do { raw_local_irq_save(flags); } while (0)
 #define local_irq_restore(flags) do { raw_local_irq_restore(flags); } while (0)
+#define local_irq_resume()	do { raw_local_irq_resume(); } while (0)
 #define safe_halt()		do { raw_safe_halt(); } while (0)
 
 #endif /* CONFIG_TRACE_IRQFLAGS */
+
+static __always_inline void local_interrupt_disable(void)
+{
+	unsigned long flags;
+
+	local_irq_save(flags);
+}
+
+static __always_inline void local_interrupt_enable(void)
+{
+	local_irq_resume();
+}
 
 #define local_save_flags(flags)	raw_local_save_flags(flags)
 
