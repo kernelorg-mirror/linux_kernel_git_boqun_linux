@@ -196,4 +196,6 @@ static __always_inline void arch_local_irq_restore(unsigned long flags)
 	}
 }
 
+static __always_inline void arch_safe_halt(void) { }
+
 #endif /* __ASM_IRQFLAGS_H */
