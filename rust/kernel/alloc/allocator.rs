@@ -131,6 +131,8 @@ impl ReallocFunc {
             NonNull::new(raw_ptr).ok_or(AllocError)?
         };
 
+        debug_assert!(raw_ptr.is_null() || (raw_ptr.addr() & 3 == 0), "{:x}", raw_ptr.addr() );
+
         Ok(NonNull::slice_from_raw_parts(ptr, size))
     }
 }

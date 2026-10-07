@@ -103,6 +103,7 @@ use crate::{
     fmt,
     num::Bounded,
     prelude::*,
+    sync::atomic::{Relaxed, Release, Atomic},
     types::ForeignOwnable, //
 };
 use core::{
@@ -387,7 +388,7 @@ impl<T: ForeignOwnable, const SHIFT: usize, const SIZE: usize> XArray<T, SHIFT, 
 // This implementation only creates node pointers via `mk_node()`. The other sub-types are reserved
 // for future RCU and multi-index support. See include/linux/xarray.h.
 #[repr(transparent)]
-struct Slot<T: ForeignOwnable, const SHIFT: usize, const SIZE: usize>(usize, PhantomData<T>);
+struct Slot<T: ForeignOwnable, const SHIFT: usize, const SIZE: usize>(Atomic<usize>, PhantomData<T>);
 
 impl<T: ForeignOwnable, const SHIFT: usize, const SIZE: usize> Default for Slot<T, SHIFT, SIZE> {
     fn default() -> Self {
@@ -406,7 +407,12 @@ enum SlotType {
 
 impl<T: ForeignOwnable, const SHIFT: usize, const SIZE: usize> Slot<T, SHIFT, SIZE> {
     // INVARIANT: `0` is the encoding for an empty slot.
-    const EMPTY: Self = Slot(0, PhantomData);
+    const EMPTY: Self = Self::new(0);
+
+    #[inline]
+    const fn new(v: usize) -> Self {
+        Self(Atomic::new(v), PhantomData)
+    }
 
     /// Encodes an [`Entry<T>`] into a [`Slot`] for tree storage.
     fn encode(entry: Entry<T>) -> Self {
@@ -419,16 +425,18 @@ impl<T: ForeignOwnable, const SHIFT: usize, const SIZE: usize> Slot<T, SHIFT, SI
             Entry::Int(v) => {
                 // INVARIANT: `*v <= usize::MAX >> 1` is guaranteed by `Value` (`Bounded`), so the
                 // shift cannot overflow and the encoded value is odd.
-                Slot((*v << 1) | 1, PhantomData)
+                pr_info!("storing Int {:x}", (*v << 1) | 1);
+                Self::new((*v << 1) | 1)
             }
             Entry::Pointer(p) => {
-                let bits = p.into_foreign() as usize;
+                let bits = p.into_foreign().expose_provenance();
+                pr_info!("storing pointer {:x}", bits);
                 debug_assert!(bits != 0, "ForeignOwnable returned null");
                 debug_assert!(bits & 3 == 0, "ForeignOwnable pointer not 4-byte aligned");
                 // INVARIANT: `into_foreign()` guarantees a non-null pointer aligned to
                 // `T::FOREIGN_ALIGN`, and `const_assert!(T::FOREIGN_ALIGN >= 4)` above ensures
                 // bits `1:0 == 0b00`.
-                Slot(bits, PhantomData)
+                Self::new(bits)
             }
         }
     }
@@ -438,7 +446,7 @@ impl<T: ForeignOwnable, const SHIFT: usize, const SIZE: usize> Slot<T, SHIFT, SI
     /// Returns [`None`] for empty slots.
     fn decode(self) -> Option<Entry<T>> {
         let slot_type = self.kind();
-        let bits = mem::ManuallyDrop::new(self).0;
+        let bits = mem::ManuallyDrop::new(self).0.load(Relaxed); // Address dependency.
 
         match slot_type {
             SlotType::Empty => None,
@@ -456,7 +464,7 @@ impl<T: ForeignOwnable, const SHIFT: usize, const SIZE: usize> Slot<T, SHIFT, SI
                 //   the tree, and `ManuallyDrop` suppresses `Slot::drop`. This is therefore the
                 //   only `from_foreign` call for this pointer.
                 Some(Entry::Pointer(unsafe {
-                    T::from_foreign(bits as *mut c_void)
+                    T::from_foreign(core::ptr::with_exposed_provenance_mut(bits))
                 }))
             }
         }
@@ -468,7 +476,7 @@ impl<T: ForeignOwnable, const SHIFT: usize, const SIZE: usize> Slot<T, SHIFT, SI
     /// [`ForeignOwnable::borrow()`].
     fn borrow(&self) -> Option<BorrowedEntry<'_, T>> {
         let slot_type = self.kind();
-        let bits = self.0;
+        let bits = self.0.load(Relaxed); // Address dependency.
 
         match slot_type {
             SlotType::Empty => None,
@@ -488,7 +496,7 @@ impl<T: ForeignOwnable, const SHIFT: usize, const SIZE: usize> Slot<T, SHIFT, SI
                 //   shared borrow, so any `from_foreign` on this pointer happens after the borrow
                 //   ends.
                 Some(BorrowedEntry::Pointer(unsafe {
-                    T::borrow(bits as *mut c_void)
+                    T::borrow(core::ptr::with_exposed_provenance_mut(bits))
                 }))
             }
         }
@@ -500,7 +508,7 @@ impl<T: ForeignOwnable, const SHIFT: usize, const SIZE: usize> Slot<T, SHIFT, SI
     /// [`ForeignOwnable::borrow_mut()`]; integer entries are returned by value.
     fn borrow_mut(&mut self) -> Option<BorrowedEntryMut<'_, T>> {
         let slot_type = self.kind();
-        let bits = self.0;
+        let bits = self.0.load(Relaxed); // Address dependency.
 
         match slot_type {
             SlotType::Empty => None,
@@ -520,7 +528,7 @@ impl<T: ForeignOwnable, const SHIFT: usize, const SIZE: usize> Slot<T, SHIFT, SI
                 //   or by unique borrow, so any `from_foreign` on this pointer happens after the
                 //   borrow ends.
                 Some(BorrowedEntryMut::Pointer(unsafe {
-                    T::borrow_mut(bits as *mut c_void)
+                    T::borrow_mut(core::ptr::with_exposed_provenance_mut(bits))
                 }))
             }
         }
@@ -531,7 +539,7 @@ impl<T: ForeignOwnable, const SHIFT: usize, const SIZE: usize> Slot<T, SHIFT, SI
 
     #[inline]
     fn kind(&self) -> SlotType {
-        let slot = self.0;
+        let slot = self.0.load(Relaxed);
         if slot == 0 {
             return SlotType::Empty;
         }
@@ -559,7 +567,8 @@ impl<T: ForeignOwnable, const SHIFT: usize, const SIZE: usize> Slot<T, SHIFT, SI
         if !self.is_node() {
             return None;
         }
-        let ptr = (self.0 & !3) as *const Node<T, SHIFT, SIZE>;
+        let ptr = self.0.load(Relaxed) & !3;
+        let ptr = core::ptr::with_exposed_provenance(ptr);
         // SAFETY:
         // - By the type invariant, a slot classified `Node` holds `KBox::into_raw()` of a valid,
         //   live `KBox<Node<T, SHIFT, SIZE>>` allocation owned by this slot. `& !3` reverses the
@@ -575,7 +584,10 @@ impl<T: ForeignOwnable, const SHIFT: usize, const SIZE: usize> Slot<T, SHIFT, SI
         if !self.is_node() {
             return None;
         }
-        let ptr = (self.0 & !3) as *mut Node<T, SHIFT, SIZE>;
+        let ptr = self.0.load(Relaxed) & !3;
+        pr_info!("as_node_mut() {:x}\n",  ptr);
+        let ptr = core::ptr::with_exposed_provenance_mut(ptr);
+
         // SAFETY:
         // - By the type invariant, a slot classified `Node` holds `KBox::into_raw()` of a valid,
         //   live `KBox<Node<T, SHIFT, SIZE>>` allocation owned by this slot. `& !3` reverses the
@@ -587,12 +599,13 @@ impl<T: ForeignOwnable, const SHIFT: usize, const SIZE: usize> Slot<T, SHIFT, SI
 
     /// Creates a node slot from a heap-allocated [`Node`].
     fn mk_node(node: KBox<Node<T, SHIFT, SIZE>>) -> Self {
-        let ptr = KBox::into_raw(node) as usize;
+        let ptr = KBox::into_raw(node).expose_provenance();
+        pr_info!("storing node {:x}", ptr);
         debug_assert!(ptr & 3 == 0, "Node pointer not aligned");
         // INVARIANT: `ptr` owns a live `KBox<Node>` allocation from `into_raw()`, so it is at least
         // 4-byte aligned (checked above) and `| 2` gives bits `1:0 == 0b10`. Kernel heap addresses
         // are far above `NODE_THRESHOLD`, so the result classifies as node.
-        Slot(ptr | 2, PhantomData)
+        Self::new(ptr | 2)
     }
 }
 
@@ -600,16 +613,18 @@ impl<T: ForeignOwnable, const SHIFT: usize, const SIZE: usize> Drop for Slot<T, 
     fn drop(&mut self) {
         match self.kind() {
             SlotType::Pointer => {
+                let ptr = core::ptr::with_exposed_provenance_mut(self.0.load(Relaxed));
                 // SAFETY:
                 // - By the type invariant, a slot classified `Pointer` holds a pointer returned by
                 //   a previous call to `T::into_foreign()`.
                 // - Every other `from_foreign` path (`decode`) consumes the slot through
                 //   `ManuallyDrop`, which suppresses this destructor, so this is the only
                 //   `from_foreign` call for this pointer.
-                drop(unsafe { T::from_foreign(self.0 as *mut c_void) });
+                drop(unsafe { T::from_foreign(ptr) });
             }
             SlotType::Node => {
-                let ptr = (self.0 & !3) as *mut Node<T, SHIFT, SIZE>;
+                let ptr = self.0.load(Relaxed) & !3;
+                let ptr = core::ptr::with_exposed_provenance_mut::<T>(ptr);
                 // SAFETY:
                 // - By the type invariant, a slot classified `Node` holds a pointer produced by
                 //   `KBox::into_raw()` in `Slot::mk_node()`, tagged with `| 2`; `& !3` above
@@ -642,6 +657,9 @@ impl<T: ForeignOwnable, const SHIFT: usize, const SIZE: usize> Drop for Slot<T, 
 struct Node<T: ForeignOwnable, const SHIFT: usize, const SIZE: usize> {
     slots: [Slot<T, SHIFT, SIZE>; SIZE],
 }
+
+static_assert!(core::mem::align_of::<Node::<(), 4, 16>>() == 8);
+static_assert!(core::mem::align_of::<Node::<(), 6, 64>>() == 8);
 
 impl<T: ForeignOwnable, const SHIFT: usize, const SIZE: usize> Node<T, SHIFT, SIZE> {
     // Bitmask for extracting the slot offset. Equivalent to XA_CHUNK_MASK.
@@ -717,6 +735,13 @@ impl<T: ForeignOwnable, const SHIFT: usize, const SIZE: usize> Node<T, SHIFT, SI
                 })
             }
         };
+
+        let ptr = KBox::into_raw(node);
+        debug_assert!(core::mem::align_of::<Self>() & 3 == 0, "Self aligned should be >=4");
+        debug_assert!(ptr.addr() & 3 == 0, "subtree is not aligned {:x}", ptr.addr());
+        // SAFETY: TODO
+        let mut node = unsafe { KBox::from_raw(ptr) };
+
         let slot_index = Self::slot_index(index, level);
         if level == 0 {
             // INVARIANT: `Slot::encode` returns an `Int` or `Pointer` slot, both of which are
@@ -743,6 +768,7 @@ impl<T: ForeignOwnable, const SHIFT: usize, const SIZE: usize> Node<T, SHIFT, SI
     ) -> Result<Option<Entry<T>>, StoreError<T>> {
         let slot_index = Self::slot_index(index, level);
         let slot = &mut self.slots[slot_index];
+        pr_info!("{:x}\n",  slot as *mut _ as usize);
         if level == 0 {
             debug_assert!(!slot.is_node(), "Found node pointer at leaf level");
             // INVARIANT: `Slot::encode` returns an `Int` or `Pointer` slot, both of which are
