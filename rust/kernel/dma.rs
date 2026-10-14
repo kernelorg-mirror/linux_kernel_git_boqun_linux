@@ -1192,27 +1192,27 @@ where
     SysMemBackend: IoCapable<T>,
 {
     #[inline]
-    fn io_read<'a>(view: Self::View<'a, T>) -> T {
-        SysMemBackend::io_read(view.cpu_addr)
+    fn read<'a>(view: Self::View<'a, T>) -> T {
+        SysMemBackend::read(view.cpu_addr)
     }
 
     #[inline]
-    fn io_write<'a>(view: Self::View<'a, T>, value: T) {
-        SysMemBackend::io_write(view.cpu_addr, value)
+    fn write<'a>(view: Self::View<'a, T>, value: T) {
+        SysMemBackend::write(view.cpu_addr, value)
     }
 }
 
 impl IoCopyable for CoherentIoBackend {
     #[inline]
-    unsafe fn copy_from_io(view: Self::View<'_, [u8]>, buffer: *mut u8) {
+    unsafe fn copy_from(view: Self::View<'_, [u8]>, buffer: *mut u8) {
         // SAFETY: Per safety requirement.
-        unsafe { SysMemBackend::copy_from_io(view.cpu_addr, buffer) }
+        unsafe { SysMemBackend::copy_from(view.cpu_addr, buffer) }
     }
 
     #[inline]
-    unsafe fn copy_to_io(view: Self::View<'_, [u8]>, buffer: *const u8) {
+    unsafe fn copy_to(view: Self::View<'_, [u8]>, buffer: *const u8) {
         // SAFETY: Per safety requirement.
-        unsafe { SysMemBackend::copy_to_io(view.cpu_addr, buffer) }
+        unsafe { SysMemBackend::copy_to(view.cpu_addr, buffer) }
     }
 
     #[inline]

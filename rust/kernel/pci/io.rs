@@ -115,7 +115,7 @@ impl IoBackend for ConfigSpaceBackend {
 macro_rules! impl_config_space_io_capable {
     ($ty:ty, $read_fn:ident, $write_fn:ident) => {
         impl IoCapable<$ty> for ConfigSpaceBackend {
-            fn io_read(view: ConfigSpace<'_, $ty>) -> $ty {
+            fn read(view: ConfigSpace<'_, $ty>) -> $ty {
                 // CAST: The offset is cast to `i32` because the C functions expect a 32-bit
                 // signed offset parameter. PCI configuration space size is at most 4096 bytes,
                 // so the value always fits within `i32` without truncation or sign change.
@@ -129,7 +129,7 @@ macro_rules! impl_config_space_io_capable {
                 val
             }
 
-            fn io_write(view: ConfigSpace<'_, $ty>, value: $ty) {
+            fn write(view: ConfigSpace<'_, $ty>, value: $ty) {
                 // CAST: The offset is cast to `i32` because the C functions expect a 32-bit
                 // signed offset parameter. PCI configuration space size is at most 4096 bytes,
                 // so the value always fits within `i32` without truncation or sign change.
